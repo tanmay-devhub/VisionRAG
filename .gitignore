@@ -12,6 +12,7 @@ build/
 .ruff_cache/
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 
 # ── Virtual environments ──────────────────────────────────────────────────────
@@ -28,19 +29,31 @@ ENV/
 *.key
 secrets/
 
-# ── Data & model storage ──────────────────────────────────────────────────────
+# ── Neo4j ─────────────────────────────────────────────────────────────────────
+backend/neo4j_data/
+backend/neo4j_logs/
+
+# ── Job store (SQLite) ────────────────────────────────────────────────────────
+backend/jobs.db
+backend/jobstore/
+
+# ── Legacy data directories ───────────────────────────────────────────────────
 backend/chroma_db/
+
+# ── Uploaded files ────────────────────────────────────────────────────────────
+static/figures/
+backend/uploads/
+
+# ── HuggingFace model cache (PaliGemma) ──────────────────────────────────────
+.cache/huggingface/
+
+# ── Model weights ─────────────────────────────────────────────────────────────
 models/
 *.bin
 *.safetensors
 *.pt
 *.ckpt
-
-# ── HuggingFace cache (PaliGemma downloads) ───────────────────────────────────
-.cache/huggingface/
-
-# ── Uploaded images ───────────────────────────────────────────────────────────
-static/figures/
+*.onnx
 
 # ── Logs & temp ───────────────────────────────────────────────────────────────
 *.log
@@ -56,6 +69,7 @@ frontend/out/
 frontend/.turbo/
 frontend/.env.local
 frontend/.env.production
+frontend/tsconfig.tsbuildinfo
 
 # ── IDEs & editors ───────────────────────────────────────────────────────────
 .vscode/
@@ -63,8 +77,15 @@ frontend/.env.production
 *.swp
 *.swo
 *~
+.project
+.classpath
 
 # ── OS ────────────────────────────────────────────────────────────────────────
 .DS_Store
+.DS_Store?
 Thumbs.db
+ehthumbs.db
 desktop.ini
+
+# ── Docker overrides ──────────────────────────────────────────────────────────
+docker-compose.override.yml
