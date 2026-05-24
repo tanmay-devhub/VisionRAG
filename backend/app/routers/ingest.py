@@ -1,3 +1,9 @@
+# ── VisionRAG Neo4j Migration ─────────────────────────────────────────────────
+# Replaces: nothing structural — adds DELETE /ingest/{filename} route only.
+# Video-ready: dispatcher can be extended with _run_ingest_video() for .mp4/.mov
+#              without touching any existing route.
+# ─────────────────────────────────────────────────────────────────────────────
+
 import os
 import shutil
 import logging
@@ -163,3 +169,10 @@ async def ingest_status(job_id: str) -> JobStatusResponse:
 @router.get("/ingest/jobs")
 async def list_ingest_jobs() -> dict:
     return {"jobs": job_store.list_jobs()}
+
+
+@router.delete("/ingest/{filename}")
+async def delete_file(filename: str) -> dict:
+    """Delete all Neo4j data for a specific ingested file."""
+    result = graph_store.delete_file(filename)
+    return {"message": f"Deleted {filename}", **result}

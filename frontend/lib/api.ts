@@ -133,3 +133,12 @@ export async function deleteGraph(): Promise<{ deleted: number }> {
   }
   return res.json() as Promise<{ deleted: number }>;
 }
+
+export async function deleteFile(filename: string): Promise<{ deleted_chunks: number; deleted_entities: number }> {
+  const res = await fetch(`${API_BASE}/ingest/${encodeURIComponent(filename)}`, { method: "DELETE" });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(detail || `Delete failed with status ${res.status}`);
+  }
+  return res.json();
+}

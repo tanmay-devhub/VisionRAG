@@ -1,3 +1,80 @@
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ── Glass panels ────────────────────────────────────────────────────────────── */
+.glass-panel {
+  background: rgba(30, 31, 38, 0.65);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.glass-panel-high {
+  background: rgba(18, 19, 26, 0.88);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+}
+
+/* ── Material Symbols ────────────────────────────────────────────────────────── */
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 20px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-feature-settings: 'liga';
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* ── Shimmer skeleton ────────────────────────────────────────────────────────── */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+.shimmer {
+  background: linear-gradient(90deg,
+    rgba(255,255,255,.04) 0%,
+    rgba(76,215,246,.14)  50%,
+    rgba(255,255,255,.04) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+}
+
+/* ── Spin ────────────────────────────────────────────────────────────────────── */
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 1s linear infinite; }
+
+/* ── Ping animation ──────────────────────────────────────────────────────────── */
+@keyframes ping {
+  75%, 100% { transform: scale(2); opacity: 0; }
+}
+.ping-dot { animation: ping 2s cubic-bezier(0, 0, 0.2, 1) infinite; }
+
+/* ── Token fade-in ───────────────────────────────────────────────────────────── */
+@keyframes tok-in { from { opacity: 0; } to { opacity: 1; } }
+.tok { display: inline; opacity: 0; animation: tok-in .3s ease-out forwards; }
+
+/* ── Glow box-shadow helpers ─────────────────────────────────────────────────── */
+.glow-cyan   { box-shadow: 0 0 20px rgba(76, 215, 246, 0.20); }
+.glow-violet { box-shadow: 0 0 20px rgba(208, 188, 255, 0.15); }
+
+/* ── Sidebar hover slide ─────────────────────────────────────────────────────── */
+.nav-item { transition: transform 200ms ease, background-color 150ms ease, color 150ms ease; }
+.nav-item:hover { transform: translateX(4px); }
+
+/* ── Scrollbar ───────────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(0,0,0,.15); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,.25); }

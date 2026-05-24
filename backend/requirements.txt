@@ -1,13 +1,12 @@
 fastapi
 uvicorn[standard]
 python-dotenv
-chromadb
+neo4j>=5.0.0
 langchain
 langchain-text-splitters
 langchain-ollama
-sentence-transformers
-transformers>=4.44.0
-accelerate
+fastembed>=0.3.0
+rapidfuzz
 Pillow
 google-genai
 openai

@@ -1,7 +1,6 @@
 import os
 import logging
 from pathlib import Path
-import fitz  # PyMuPDF
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +15,7 @@ _DRAWING_THRESHOLD = int(os.getenv("DRAWING_THRESHOLD", "15"))
 
 class FigureExtractor:
     def extract_all(self, pdf_path: str, doc_id: str) -> list[dict]:
+        import fitz  # lazy — avoids PyMuPDF DLL scan at startup
         results: list[dict] = []
         os.makedirs(_FIGURES_DIR, exist_ok=True)
 
@@ -75,7 +75,7 @@ class FigureExtractor:
                 try:
                     drawings = page.get_drawings()
                     if len(drawings) >= _DRAWING_THRESHOLD:
-                        mat = fitz.Matrix(2, 2)  # 144 DPI
+                        mat = fitz.Matrix(2, 2)  # noqa: F821  # 144 DPI
                         pix = page.get_pixmap(matrix=mat, alpha=False)
                         filename = f"{doc_id}_p{page_num}_render.png"
                         save_path = os.path.join(_FIGURES_DIR, filename)

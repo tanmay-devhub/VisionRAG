@@ -1,13 +1,19 @@
 import logging
-import fitz  # PyMuPDF
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.services.vision import VisionService
 from app.services.figure_extractor import FigureExtractor
 
 logger = logging.getLogger(__name__)
 
-_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
+_splitter = None  # RecursiveCharacterTextSplitter, lazy
+
+
+def _get_splitter():
+    global _splitter
+    if _splitter is None:
+        from langchain_text_splitters import RecursiveCharacterTextSplitter  # lazy
+        _splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
+    return _splitter
 
 
 class MultimodalChunker:
@@ -16,6 +22,7 @@ class MultimodalChunker:
         self._extractor = FigureExtractor()
 
     def chunk_document(self, pdf_path: str, doc_id: str) -> list[dict]:
+        import fitz  # lazy — avoids PyMuPDF DLL scan at startup
         chunks: list[dict] = []
 
         # ── text chunks ───────────────────────────────────────────────────────
@@ -27,7 +34,8 @@ class MultimodalChunker:
             logger.error("Text extraction failed for %s: %s", pdf_path, exc)
             full_text = ""
 
-        text_splits = _splitter.split_text(full_text) if full_text.strip() else []
+        splitter = _get_splitter()
+        text_splits = splitter.split_text(full_text) if full_text.strip() else []
         for i, text in enumerate(text_splits):
             chunks.append({
                 "text": text,
@@ -64,8 +72,6 @@ class MultimodalChunker:
                 if not description:
                     continue
 
-                # Prepend surrounding page text so chart titles/axis labels
-                # are searchable even when Qwen omits them from its description.
                 context_snippet = item.get("context", "")[:300].strip()
                 chunk_text = f"{context_snippet}\n{description}" if context_snippet else description
 

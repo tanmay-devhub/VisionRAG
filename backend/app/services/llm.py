@@ -1,15 +1,15 @@
 import os
-from langchain_ollama import OllamaLLM
 
 _OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 _LLM_MODEL       = os.getenv("LLM_MODEL", "llama3.2")
 
-_llm_instance: OllamaLLM | None = None
+_llm_instance = None  # OllamaLLM, lazy
 
 
-def get_llm() -> OllamaLLM:
+def get_llm():
     global _llm_instance
     if _llm_instance is None:
+        from langchain_ollama import OllamaLLM  # lazy — avoids langchain init at startup
         _llm_instance = OllamaLLM(base_url=_OLLAMA_BASE_URL, model=_LLM_MODEL)
     return _llm_instance
 

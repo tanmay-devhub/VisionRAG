@@ -1,5 +1,27 @@
 services:
 
+  visionrag-neo4j:
+    image: neo4j:5.18-community
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    environment:
+      - NEO4J_AUTH=neo4j/visionrag_password
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_memory_heap_initial__size=512m
+      - NEO4J_dbms_memory_heap_max__size=1G
+      - NEO4J_dbms_memory_pagecache_size=512m
+    volumes:
+      - visionrag_neo4j_data:/data
+      - visionrag_neo4j_logs:/logs
+    networks:
+      - visionrag-network
+    healthcheck:
+      test: ["CMD", "cypher-shell", "-u", "neo4j", "-p", "visionrag_password", "RETURN 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   visionrag-ollama:
     image: ollama/ollama
     ports:
@@ -14,13 +36,20 @@ services:
     ports:
       - "8081:8080"
     depends_on:
-      - visionrag-ollama
+      visionrag-neo4j:
+        condition: service_healthy
+      visionrag-ollama:
+        condition: service_started
     env_file: ./backend/.env
     environment:
-      - CHROMA_DIR=/app/chroma_db
+      - NEO4J_URI=bolt://visionrag-neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=visionrag_password
+      - OLLAMA_BASE_URL=http://visionrag-ollama:11434
+      - JOB_STORE_PATH=/app/jobstore/jobs.db
     volumes:
       - ./static/figures:/app/static/figures
-      - visionrag_chroma_data:/app/chroma_db
+      - visionrag_jobs_data:/app/jobstore
     networks:
       - visionrag-network
 
@@ -37,7 +66,9 @@ services:
 
 volumes:
   visionrag_ollama_data:
-  visionrag_chroma_data:
+  visionrag_neo4j_data:
+  visionrag_neo4j_logs:
+  visionrag_jobs_data:
 
 networks:
   visionrag-network:

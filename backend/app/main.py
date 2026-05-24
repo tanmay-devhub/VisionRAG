@@ -1,3 +1,8 @@
+# ── VisionRAG Neo4j Migration ─────────────────────────────────────────────────
+# Replaces: ChromaDB lifespan ping + health key "chroma"
+# Video-ready: lifespan is generic; adding video routes requires no changes here.
+# ─────────────────────────────────────────────────────────────────────────────
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -21,9 +26,6 @@ _VISION_BACKEND      = os.getenv("VISION_BACKEND",      "ollama")
 _OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "qwen2.5vl:7b")
 _PALIGEMMA_MODEL     = os.getenv("PALIGEMMA_MODEL",     "google/paligemma2-3b-ft-docci-448")
 
-# Resolve FIGURES_DIR relative to the backend package root so that
-# ../static/figures works whether uvicorn is launched from visionrag/backend/
-# or from any other directory.
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 _raw_figures  = os.getenv("FIGURES_DIR", "../static/figures")
 _FIGURES_DIR  = str((_BACKEND_ROOT / _raw_figures).resolve())
@@ -32,12 +34,17 @@ _FIGURES_DIR  = str((_BACKEND_ROOT / _raw_figures).resolve())
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     os.makedirs(_FIGURES_DIR, exist_ok=True)
+
+    # SQLite job store — stdlib only, instant
     try:
-        graph_store.ping()
-        logger.info("ChromaDB ready")
+        from app.services import job_store
+        job_store.mark_interrupted_jobs()
+        logger.info("Job store ready (SQLite)")
     except Exception as exc:
-        logger.error("ChromaDB not ready: %s", exc)
-        raise RuntimeError(f"ChromaDB init failed: {exc}") from exc
+        logger.warning("Job store init failed: %s", exc)
+
+    # Neo4j + embeddings connect lazily on first request (avoids Defender DLL scan at startup)
+    logger.info("VisionRAG ready — Neo4j and embeddings will connect on first use")
     yield
 
 
@@ -59,15 +66,15 @@ app.include_router(graph.router)
 
 @app.get("/health")
 async def health() -> dict:
-    chroma_status = "ok"
+    neo4j_status  = "ok"
     ollama_status = "ok"
     gemini_status = "configured" if _GEMINI_API_KEY else "missing"
 
     try:
         graph_store.ping()
     except Exception as exc:
-        logger.warning("ChromaDB health check failed: %s", exc)
-        chroma_status = f"error: {exc}"
+        logger.warning("Neo4j health check failed: %s", exc)
+        neo4j_status = f"error: {exc}"
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -89,7 +96,7 @@ async def health() -> dict:
 
     return {
         "status":         "ok",
-        "chroma":         chroma_status,
+        "neo4j":          neo4j_status,
         "ollama":         ollama_status,
         "gemini":         gemini_status,
         "vision_backend": _VISION_BACKEND,

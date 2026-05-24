@@ -12,7 +12,7 @@ router = APIRouter()
 async def query(request: QueryRequest) -> QueryResponse:
     try:
         candidates = await asyncio.to_thread(
-            graph_store.query_chunks, request.question, request.top_k * 4
+            graph_store.query_chunks, request.question, request.top_k
         )
         ranked = await asyncio.to_thread(
             reranker.rerank, request.question, candidates, request.top_k
