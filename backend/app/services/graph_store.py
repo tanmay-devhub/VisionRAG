@@ -571,16 +571,26 @@ def get_all_graph_data(filename: str | None = None) -> dict:
                 """
                 MATCH (a:MediaChunk)-[:DEPICTS]->(e1:VisualEntity)-[:CO_OCCURS_WITH]->(e2:VisualEntity)
                 WHERE a.id IN $ids
-                RETURN 'entity_' + e1.name AS src, 'entity_' + e2.name AS tgt
+                RETURN 'entity_' + e1.name AS src, 'entity_' + e2.name AS tgt,
+                       e2.name AS tgt_name, e2.display_name AS tgt_display
                 LIMIT 3000
                 """,
                 ids=list(chunk_ids),
             )
             for rec in co_res:
                 src, tgt = rec["src"], rec["tgt"]
-                # Only include the link if BOTH entities are in the visible node set
-                if src in seen_entities and tgt in seen_entities:
-                    links.append({"source": src, "target": tgt, "type": "CO_OCCURS_WITH"})
+                if src not in seen_entities:
+                    continue
+                # Add the neighbor entity as a node if not already present
+                if tgt not in seen_entities:
+                    seen_entities.add(tgt)
+                    display = rec.get("tgt_display") or rec.get("tgt_name") or tgt[len("entity_"):]
+                    nodes.append({
+                        "id":       tgt,
+                        "label":    display,
+                        "nodeType": "entity",
+                    })
+                links.append({"source": src, "target": tgt, "type": "CO_OCCURS_WITH"})
 
     return {"nodes": nodes, "links": links}
 
