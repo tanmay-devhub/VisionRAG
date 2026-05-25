@@ -7,6 +7,7 @@ langchain-text-splitters
 langchain-ollama
 fastembed>=0.3.0
 rapidfuzz
+numpy
 Pillow
 google-genai
 openai

@@ -69,15 +69,36 @@ def _run_ingest_pdf(job_id: str, filename: str, pdf_path: str) -> None:
 
 # ── Image ingest ──────────────────────────────────────────────────────────────
 
+_MAX_IMAGE_DIM = 1280  # longest side — prevents Ollama VRAM exhaustion on large images
+
+
+def _resize_image(src_path: str, dst_path: str, max_dim: int = _MAX_IMAGE_DIM) -> None:
+    """Resize image so its longest side is at most max_dim, save as PNG."""
+    from PIL import Image as PILImage
+    with PILImage.open(src_path) as img:
+        img = img.convert("RGB")
+        w, h = img.size
+        if max(w, h) > max_dim:
+            scale = max_dim / max(w, h)
+            img = img.resize((int(w * scale), int(h * scale)), PILImage.LANCZOS)
+            logger.info("Resized %s from %dx%d to %dx%d", src_path, w, h, img.size[0], img.size[1])
+        img.save(dst_path, format="PNG")
+
+
 def _run_ingest_image(job_id: str, filename: str, tmp_path: str) -> None:
     job_store.update_job(job_id, status="processing", total_chunks=1, figure_count=1)
     try:
         os.makedirs(_FIGURES_DIR, exist_ok=True)
 
-        stem, ext = os.path.splitext(filename)
-        fig_name  = f"{stem}_{job_id[:8]}{ext}"
+        stem      = os.path.splitext(filename)[0]
+        fig_name  = f"{stem}_{job_id[:8]}.png"   # always PNG after resize
         save_path = os.path.join(_FIGURES_DIR, fig_name)
-        shutil.copy2(tmp_path, save_path)
+
+        try:
+            _resize_image(tmp_path, save_path)
+        except Exception as exc:
+            logger.warning("Resize failed for %s (%s) — copying original", filename, exc)
+            shutil.copy2(tmp_path, save_path)
 
         vision   = VisionService()
         result   = vision.describe_figure(save_path, "")

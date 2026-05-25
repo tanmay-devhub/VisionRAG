@@ -418,6 +418,10 @@ def query_chunks(question: str, top_k: int) -> list[dict]:
                             WITH e
                             MATCH (e)-[:CO_OCCURS_WITH]-(e2:VisualEntity)<-[:DEPICTS]-(c:MediaChunk)
                             RETURN c, 0.4 AS score
+                            UNION
+                            WITH e
+                            MATCH (e)<-[:DEPICTS]-(c1:MediaChunk)-[:VISUALLY_SIMILAR]-(c2:MediaChunk)
+                            RETURN c2 AS c, 0.35 AS score
                         }
                         RETURN c AS node, max(score) AS score
                         LIMIT $lim
@@ -592,6 +596,18 @@ def get_all_graph_data(filename: str | None = None) -> dict:
                     })
                 links.append({"source": src, "target": tgt, "type": "CO_OCCURS_WITH"})
 
+            vs_res = session.run(
+                """
+                MATCH (a:MediaChunk)-[:VISUALLY_SIMILAR]->(b:MediaChunk)
+                WHERE a.id IN $ids AND b.id IN $ids
+                RETURN a.id AS src, b.id AS tgt
+                LIMIT 1000
+                """,
+                ids=list(chunk_ids),
+            )
+            for rec in vs_res:
+                links.append({"source": rec["src"], "target": rec["tgt"], "type": "VISUALLY_SIMILAR"})
+
     return {"nodes": nodes, "links": links}
 
 
@@ -607,19 +623,26 @@ def get_graph_stats() -> dict:
             OPTIONAL MATCH (e:VisualEntity)
             WITH total, figures, tables, text_chunks, count(e) AS entities
             OPTIONAL MATCH ()-[r:CO_OCCURS_WITH]->()
-            RETURN total, figures, tables, text_chunks, entities, count(r) AS relationships
+            WITH total, figures, tables, text_chunks, entities, count(r) AS co_occurs
+            OPTIONAL MATCH ()-[s:VISUALLY_SIMILAR]->()
+            RETURN total, figures, tables, text_chunks, entities,
+                   co_occurs, count(s) AS visually_similar
             """
         )
         rec = res.single()
         if rec is None:
-            return {"total_chunks": 0, "figures": 0, "tables": 0, "text_chunks": 0, "entities": 0, "relationships": 0}
+            return {
+                "total_chunks": 0, "figures": 0, "tables": 0, "text_chunks": 0,
+                "entities": 0, "relationships": 0, "visually_similar_edges": 0,
+            }
         return {
-            "total_chunks":  int(rec["total"]         or 0),
-            "figures":       int(rec["figures"]        or 0),
-            "tables":        int(rec["tables"]         or 0),
-            "text_chunks":   int(rec["text_chunks"]    or 0),
-            "entities":      int(rec["entities"]       or 0),
-            "relationships": int(rec["relationships"]  or 0),
+            "total_chunks":           int(rec["total"]            or 0),
+            "figures":                int(rec["figures"]           or 0),
+            "tables":                 int(rec["tables"]            or 0),
+            "text_chunks":            int(rec["text_chunks"]       or 0),
+            "entities":               int(rec["entities"]          or 0),
+            "relationships":          int(rec["co_occurs"]         or 0),
+            "visually_similar_edges": int(rec["visually_similar"]  or 0),
         }
 
 

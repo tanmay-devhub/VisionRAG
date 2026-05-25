@@ -1,52 +1,64 @@
 # VisionRAG
 
-**Multimodal RAG over PDFs and images text, figures, tables, and a live knowledge graph.**
+**Multimodal RAG over PDFs and images — text, figures, tables, and a live knowledge graph.**
 
-VisionRAG ingests PDF documents and images, routes each page element through a configurable vision model, stores everything in a Neo4j graph database, and answers natural-language questions with hybrid retrieval (vector + full-text + entity graph traversal). A built-in graph viewer lets you explore the extracted knowledge graph interactively.
+VisionRAG ingests PDF documents and images, routes each element through a configurable vision model, stores everything in a Neo4j graph database, and answers natural-language questions with hybrid retrieval (vector + full-text + entity graph traversal + visual similarity). A built-in graph viewer lets you explore the extracted knowledge graph interactively.
 
 ---
 
 ## Features
 
-- **Multimodal ingest** PDFs (text chunks, extracted figures, tables) and standalone images (PNG, JPG, WEBP)
-- **Four vision backends** Ollama (local), PaliGemma (local HuggingFace), Gemini Flash, or OpenAI GPT-4o
-- **Knowledge graph** entities and relationships extracted from visual content are stored in Neo4j and linked to their source chunks
-- **Hybrid retrieval** vector search, full-text search, and entity graph traversal fused with Reciprocal Rank Fusion
-- **CrossEncoder reranking** `ms-marco-MiniLM-L-6-v2` reranker applied before the LLM
-- **Interactive graph viewer** D3 force-directed graph with per-file filtering, node labels, and search
-- **Per-file management** delete individual documents and their graph nodes without clearing the whole store
-- **Real-time ingest progress** SSE-based status updates while documents are being processed
-- **Zero cloud dependencies** the default configuration runs entirely on your machine
+- **Multimodal ingest** — PDFs (text chunks, extracted figures, tables) and standalone images (PNG, JPG, WEBP); all images are automatically resized to max 1280 px before processing
+- **Four vision backends** — Ollama (local), PaliGemma (local HuggingFace), Gemini Flash, or OpenAI GPT-4o
+- **Object detection awareness** — vision prompt instructs the model to describe annotated objects rather than annotation fill colours, improving entity extraction from labelled datasets
+- **Knowledge graph** — entities and relationships extracted from visual content are stored in Neo4j and linked to their source chunks
+- **Entity deduplication** — on-demand fuzzy merge of near-duplicate `VisualEntity` nodes using rapidfuzz token-sort ratio
+- **Visual similarity edges** — `VISUALLY_SIMILAR` edges connect figure/frame chunks with cosine-similar embeddings, enabling cross-image retrieval
+- **Hybrid retrieval** — vector search, full-text search, and entity graph traversal (including `VISUALLY_SIMILAR` paths) fused with Reciprocal Rank Fusion
+- **CrossEncoder reranking** — `ms-marco-MiniLM-L-6-v2` reranker applied before the LLM
+- **Context-aware answer generation** — uploaded content is the primary source; general knowledge fills gaps only, with explicit source attribution
+- **Interactive graph viewer** — D3 force-directed graph with per-file filtering, node labels, and search
+- **Per-file management** — delete individual documents and all their graph nodes without clearing the whole store
+- **Real-time ingest progress** — SSE-based status updates while documents are processed
+- **RAGAS evaluation harness** — 5 LLM-as-judge metrics (faithfulness, answer relevancy, context precision, context recall, visual grounding)
+- **Zero cloud dependencies** — the default configuration runs entirely on your machine
 
 ---
 
 ## How it works
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  INGEST                                                         │
-│                                                                 │
-│  PDF / Image                                                    │
-│      │                                                          │
-│      ├─► Text chunks ──► fastembed (all-MiniLM-L6-v2)          │
-│      │                        └─► Neo4j :MediaChunk nodes       │
-│      │                                                          │
-│      └─► Figures / Tables                                       │
-│              └─► Vision model ──► description + entities        │
-│                      └─► Neo4j :MediaChunk + :VisualEntity      │
-│                              └─► :DEPICTS, :CO_OCCURS_WITH      │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│  INGEST                                                              │
+│                                                                      │
+│  PDF / Image                                                         │
+│      │                                                               │
+│      ├─► Auto-resize (max 1280 px) ──► saved to static/figures/     │
+│      │                                                               │
+│      ├─► Text chunks ──► fastembed (all-MiniLM-L6-v2)               │
+│      │                        └─► Neo4j :MediaChunk nodes            │
+│      │                                                               │
+│      └─► Figures / Tables                                            │
+│              └─► Vision model ──► description + entities             │
+│                      └─► Neo4j :MediaChunk + :VisualEntity           │
+│                              └─► :DEPICTS, :CO_OCCURS_WITH           │
+│                                                                      │
+│  POST-INGEST (on demand)                                             │
+│      ├─► /graph/entity-dedup   ──► merge near-duplicate entities     │
+│      └─► /graph/build-similarity ─► :VISUALLY_SIMILAR edges         │
+└──────────────────────────────────────────────────────────────────────┘
 
-┌─────────────────────────────────────────────────────────────────┐
-│  QUERY                                                          │
-│                                                                 │
-│  Question                                                       │
-│      ├─► Vector search    ─┐                                    │
-│      ├─► Full-text search  ├─► RRF fusion ──► CrossEncoder      │
-│      └─► Graph traversal  ─┘        └─► top-k chunks           │
-│                                              └─► Ollama LLM     │
-│                                                      └─► Answer │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│  QUERY                                                               │
+│                                                                      │
+│  Question                                                            │
+│      ├─► Vector search          ─┐                                   │
+│      ├─► Full-text search        ├─► RRF fusion ──► CrossEncoder     │
+│      └─► Graph traversal        ─┘        └─► top-k chunks          │
+│              ├─► DEPICTS                          └─► Ollama LLM     │
+│              ├─► CO_OCCURS_WITH                           └─► Answer │
+│              └─► VISUALLY_SIMILAR                                    │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -61,18 +73,21 @@ VisionRAG ingests PDF documents and images, routes each page element through a c
 | Reranker | `cross-encoder/ms-marco-MiniLM-L-6-v2` via fastembed |
 | Text LLM | Ollama (`llama3.2`) via langchain-ollama |
 | Vision | Ollama · PaliGemma 2 · Gemini Flash · GPT-4o |
+| Fuzzy matching | rapidfuzz (entity deduplication) |
+| Image processing | Pillow (resize, format normalisation) |
 | PDF parsing | PyMuPDF + pdfplumber |
+| Evaluation | Custom RAGAS harness — Ollama as LLM judge |
 | Frontend | Next.js 14 · TypeScript · Tailwind CSS · D3.js v7 |
 
 ---
 
-## Quick start  local
+## Quick start — local
 
 ### Prerequisites
 
 - Python 3.11+
 - Node.js 18+
-- Neo4j 5.x running locally [Download Neo4j Desktop](https://neo4j.com/download/) or via Docker
+- Neo4j 5.x running locally — [Download Neo4j Desktop](https://neo4j.com/download/) or via Docker
 - [Ollama](https://ollama.com) installed and running
 
 ```bash
@@ -102,10 +117,10 @@ Open [http://localhost:3001](http://localhost:3001).
 
 ---
 
-## Quick start Docker
+## Quick start — Docker
 
 ```bash
-cp backend/.env.example backend/.env   # set your API keys if needed
+cp backend/.env.example backend/.env   # set API keys if needed
 
 docker compose up --build
 
@@ -143,6 +158,59 @@ The model downloads automatically on first ingest and is cached in `~/.cache/hug
 
 ---
 
+## Post-ingest graph enrichment
+
+After uploading documents, two optional steps improve retrieval quality:
+
+```bash
+# 1. Merge near-duplicate entity nodes (run after every new ingest)
+curl -X POST "http://localhost:8081/graph/entity-dedup"
+
+# 2. Build visual similarity edges between figure chunks
+curl -X POST "http://localhost:8081/graph/build-similarity"
+
+# Scope either step to a single file
+curl -X POST "http://localhost:8081/graph/entity-dedup?filename=report.pdf"
+curl -X POST "http://localhost:8081/graph/build-similarity?threshold=0.75"
+```
+
+**Entity dedup** uses `rapidfuzz.token_sort_ratio` to find names that are the same concept written differently (e.g. "bar chart" vs "a bar chart"), merges them into a single canonical node, and re-points all `DEPICTS` and `CO_OCCURS_WITH` edges.
+
+**Visual similarity** computes cosine similarity across all figure/frame chunk embeddings and creates `VISUALLY_SIMILAR` edges for pairs above the threshold (default `0.82`). These edges add a fourth retrieval path in `query_chunks`, surfacing visually similar images that keyword and entity search would miss.
+
+---
+
+## Evaluation
+
+A RAGAS-style evaluation harness is included at `backend/eval/ragas_eval.py`. It uses Ollama as an LLM judge and requires no external evaluation libraries.
+
+```bash
+cd backend
+
+# Smoke test (3 questions)
+python eval/ragas_eval.py --subset 3
+
+# Full run — saves to eval/baseline_before_video.json
+python eval/ragas_eval.py
+
+# Custom output path
+python eval/ragas_eval.py --output eval/my_run.json
+```
+
+### Metrics
+
+| Metric | What it measures |
+|---|---|
+| `faithfulness` | Are answer claims supported by retrieved context? |
+| `answer_relevancy` | Does the answer address the question? |
+| `context_precision` | Are the retrieved chunks relevant to the question? |
+| `context_recall` | Does the retrieved context cover the ground truth? |
+| `visual_grounding` | Are visual claims in the answer grounded in figure descriptions? |
+
+Scores range from `0.0` to `1.0`. Edit `backend/eval/golden_dataset.json` to add questions about your specific uploaded documents before running.
+
+---
+
 ## Environment variables
 
 | Variable | Default | Description |
@@ -152,16 +220,19 @@ The model downloads automatically on first ingest and is cached in `~/.cache/hug
 | `OLLAMA_VISION_MODEL` | `qwen2.5vl:7b` | Vision model for Ollama backend |
 | `LLM_MODEL` | `llama3.2` | Ollama model for answer generation |
 | `PALIGEMMA_MODEL` | `google/paligemma2-3b-ft-docci-448` | HuggingFace model ID for PaliGemma |
-| `HF_TOKEN`  | HuggingFace token (required for PaliGemma) |
-| `GEMINI_API_KEY`  | Google AI Studio API key |
-| `OPENAI_API_KEY`  | OpenAI API key |
+| `HF_TOKEN` | — | HuggingFace token (required for PaliGemma) |
+| `GEMINI_API_KEY` | — | Google AI Studio API key |
+| `OPENAI_API_KEY` | — | OpenAI API key |
 | `OPENAI_VISION_MODEL` | `gpt-4o-mini` | OpenAI model for vision |
 | `NEO4J_URI` | `bolt://localhost:7687` | Neo4j Bolt connection URI |
 | `NEO4J_USER` | `neo4j` | Neo4j username |
-| `NEO4J_PASSWORD`  | Neo4j password (required) |
+| `NEO4J_PASSWORD` | — | Neo4j password (required) |
 | `EMBED_MODEL` | `all-MiniLM-L6-v2` | fastembed model for chunk embeddings |
 | `FIGURES_DIR` | `../static/figures` | Directory for extracted figure images |
+| `FIGURES_SERVE_URL` | `http://localhost:8081/figures` | Public URL prefix for figure images |
 | `JOB_STORE_PATH` | `./jobs.db` | SQLite path for ingest job tracking |
+| `ENTITY_DEDUP_THRESHOLD` | `88` | rapidfuzz score threshold for entity merging (0–100) |
+| `VISUAL_SIM_THRESHOLD` | `0.82` | Cosine similarity cutoff for `VISUALLY_SIMILAR` edges |
 
 ---
 
@@ -174,33 +245,42 @@ The model downloads automatically on first ingest and is cached in `~/.cache/hug
 │   │   ├── main.py                  # FastAPI app, CORS, lifespan, health endpoint
 │   │   ├── schemas.py               # Pydantic request/response models
 │   │   ├── routers/
-│   │   │   ├── ingest.py            # POST /ingest, GET /ingest/status/{id}, DELETE /ingest/{filename}
+│   │   │   ├── ingest.py            # POST /ingest (with auto image resize), DELETE /ingest/{filename}
 │   │   │   ├── query.py             # POST /query
-│   │   │   └── graph.py             # GET|DELETE /graph, /graph/files, /graph/stats
+│   │   │   └── graph.py             # GET|DELETE /graph, /graph/files, /graph/stats,
+│   │   │                            # POST /graph/entity-dedup, POST /graph/build-similarity
 │   │   └── services/
-│   │       ├── vision.py            # VisionService dispatches to ollama/paligemma/gemini/openai
-│   │       ├── graph_store.py       # Neo4j store, hybrid retrieval, graph export
-│   │       ├── llm.py               # Ollama LLM answer generation
+│   │       ├── vision.py            # VisionService — ollama/paligemma/gemini/openai,
+│   │       │                        # serialised Ollama calls, retry with backoff,
+│   │       │                        # object detection annotation prompt
+│   │       ├── graph_store.py       # Neo4j store, hybrid retrieval (+ VISUALLY_SIMILAR path),
+│   │       │                        # graph export, updated stats
+│   │       ├── entity_dedup.py      # Entity dedup (rapidfuzz) + visual similarity builder
+│   │       ├── llm.py               # Ollama LLM — context-first prompt, general knowledge fallback
 │   │       ├── reranker.py          # CrossEncoder reranking via fastembed
 │   │       └── job_store.py         # SQLite-backed ingest job tracking
+│   ├── eval/
+│   │   ├── ragas_eval.py            # RAGAS evaluation harness (Ollama as judge)
+│   │   ├── golden_dataset.json      # Ground-truth Q&A pairs for evaluation
+│   │   └── requirements.txt         # Eval-only dependencies
 │   ├── .env.example
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── frontend/
 │   ├── app/
-│   │   ├── page.tsx                 # Root page Chat / Graph / Files tabs
+│   │   ├── page.tsx                 # Root page — Chat / Graph / Files tabs
 │   │   ├── layout.tsx
 │   │   ├── globals.css
 │   │   └── components/
 │   │       ├── ChatWindow.tsx       # Chat interface with markdown + inline sources
-│   │       ├── GraphView.tsx        # D3 force-directed knowledge graph
+│   │       ├── GraphView.tsx        # D3 force-directed knowledge graph (full-page tab)
 │   │       ├── UploadPanel.tsx      # File upload with real-time ingest progress
 │   │       └── SourcePanel.tsx      # Expandable source citations
 │   ├── lib/
 │   │   └── api.ts                   # Typed fetch wrappers for all backend endpoints
 │   └── Dockerfile
 ├── static/
-│   └── figures/                     # Extracted figure images (served by backend)
+│   └── figures/                     # Extracted and resized figure images (served by backend)
 ├── docker-compose.yml
 ├── start.bat
 └── README.md
@@ -212,16 +292,18 @@ The model downloads automatically on first ingest and is cached in `~/.cache/hug
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/health` | Service status Neo4j, Ollama, vision backend |
-| `POST` | `/ingest` | Upload a file (PDF or image); returns `job_id` |
+| `GET` | `/health` | Service status — Neo4j, Ollama, vision backend |
+| `POST` | `/ingest` | Upload a file (PDF or image); auto-resizes images; returns `job_id` |
 | `GET` | `/ingest/status/{job_id}` | Poll ingest progress and chunk counts |
 | `GET` | `/ingest/jobs` | List all ingest jobs |
 | `DELETE` | `/ingest/{filename}` | Delete one file and all its graph nodes |
 | `POST` | `/query` | Ask a question; returns `answer` + `sources` |
 | `GET` | `/graph` | Full graph data for visualisation (`?filename=` to filter) |
 | `GET` | `/graph/files` | List ingested files with chunk/figure/table counts |
-| `GET` | `/graph/stats` | Aggregate stats across the entire graph |
+| `GET` | `/graph/stats` | Aggregate stats including `visually_similar_edges` count |
 | `DELETE` | `/graph` | Clear all ingested data |
+| `POST` | `/graph/entity-dedup` | Merge near-duplicate VisualEntity nodes (`?filename=` to scope) |
+| `POST` | `/graph/build-similarity` | Build VISUALLY_SIMILAR edges (`?filename=`, `?threshold=`) |
 | `GET` | `/figures/{filename}` | Serve an extracted figure image |
 
 ---
@@ -233,10 +315,19 @@ The model downloads automatically on first ingest and is cached in `~/.cache/hug
 (:MediaChunk)-[:NEXT_CHUNK]->(:MediaChunk)
 (:MediaChunk)-[:DEPICTS]->(:VisualEntity)
 (:VisualEntity)-[:CO_OCCURS_WITH]->(:VisualEntity)
+(:MediaChunk)-[:VISUALLY_SIMILAR {score: float}]->(:MediaChunk)
 ```
 
 | Node label | Key properties |
 |---|---|
 | `Document` | `filename`, `source_type`, `chunk_count`, `ingested_at` |
-| `MediaChunk` | `id`, `filename`, `chunk_type` (`text`/`figure`/`table`), `text`, `embedding`, `image_url` |
+| `MediaChunk` | `id`, `filename`, `chunk_type` (`text`/`figure`/`table`/`frame`), `text`, `embedding`, `image_url` |
 | `VisualEntity` | `name`, `display_name`, `entity_type`, `mention_count` |
+
+| Relationship | Properties | Description |
+|---|---|---|
+| `CONTAINS` | — | Document owns a chunk |
+| `NEXT_CHUNK` | — | Sequential order within a document |
+| `DEPICTS` | — | Chunk references a visual entity |
+| `CO_OCCURS_WITH` | — | Two entities appear together in the same chunk |
+| `VISUALLY_SIMILAR` | `score` (float 0–1) | Two figure/frame chunks have similar embeddings |

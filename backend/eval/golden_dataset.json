@@ -1,0 +1,65 @@
+{
+  "_instructions": "Questions based on 14 ingested images. pic.png and pic2.png are object detection dataset samples — coloured fills are bounding-box annotations over real objects, not cartoons. Run: python eval/ragas_eval.py --subset 3 for a smoke test.",
+  "dataset": [
+    {
+      "question": "Is there a surfboard in any of the images? Describe it.",
+      "ground_truth": "Yes. The beach image (pic.png) shows a person carrying a surfboard. The orange fill is an object detection annotation over a person and the purple fill marks a surfboard being carried.",
+      "expected_context": ["Figure description of beach scene mentioning surfboard or person carrying board."],
+      "chunk_types_expected": ["figure"]
+    },
+    {
+      "question": "What animals can be seen in the uploaded images?",
+      "ground_truth": "Multiple images contain animals: the zoo fence image (pic2.png) shows annotated giraffes and a dog; pic5.png shows black silhouettes of rhinoceros, elephant, bear, zebra, lion, monkey, giraffe, penguin, camel, gorilla and hippopotamus; pic4.png shows monkeys in a zoo enclosure; pic7.jpg shows a large group of flamingos; pic8.jpg shows tropical fish underwater.",
+      "expected_context": ["Figure descriptions mentioning animals across multiple images."],
+      "chunk_types_expected": ["figure"]
+    },
+    {
+      "question": "What is happening in the beach scene?",
+      "ground_truth": "The beach scene shows a busy oceanfront with sandy shore, ocean waves, and clear blue sky. Object detection annotations mark people on the beach — one person carrying a surfboard, others seated under colourful beach umbrellas. A lifeguard stand is visible on the left and a parasail is in the distance over the ocean.",
+      "expected_context": ["Figure description of pic.png beach scene."],
+      "chunk_types_expected": ["figure"]
+    },
+    {
+      "question": "What animals are annotated in the zoo fence image?",
+      "ground_truth": "The zoo fence image (pic2.png) is an object detection sample. The annotation overlays mark a large animal (giraffe or hippo) in cyan/teal, a giraffe in the background in pink/magenta, and a dog in the foreground in green. The real background shows a green metal grid fence and a zoo enclosure.",
+      "expected_context": ["Figure description of pic2.png zoo fence with annotation overlays."],
+      "chunk_types_expected": ["figure"]
+    },
+    {
+      "question": "Which images show outdoor scenes — describe what is happening in each one.",
+      "ground_truth": "Multiple images are outdoor scenes: the beach (pic.png) with ocean, umbrellas and people; the zoo fence (pic2.png) with annotated animals; the zoo enclosure (pic4.png) with monkeys; the flamingo field (pic7.jpg) in shallow water; the farmers market (pic12.png) with produce stalls; the outdoor concert (pic11.jpg) at sunset.",
+      "expected_context": ["Figure descriptions for multiple outdoor scene images."],
+      "chunk_types_expected": ["figure"]
+    },
+    {
+      "question": "Describe the underwater image.",
+      "ground_truth": "The underwater image (pic8.jpg) shows a vibrant coral reef scene with tropical fish including yellow and black striped fish and bright yellow fish. Colourful pink and purple coral is visible, and a scuba diver can be seen in the background.",
+      "expected_context": ["Figure description of pic8.jpg underwater scene."],
+      "chunk_types_expected": ["figure"]
+    },
+    {
+      "question": "What is shown at the farmers market?",
+      "ground_truth": "The farmers market image (pic12.png) shows an outdoor market with fresh produce displayed in wooden crates: sunflowers, fruits, vegetables. White canopy tents are visible in the background along with market visitors.",
+      "expected_context": ["Figure description of pic12.png farmers market."],
+      "chunk_types_expected": ["figure"]
+    },
+    {
+      "question": "What is the text written on the signs or boards in the images?",
+      "ground_truth": "No readable text was extracted from any of the uploaded images. The vision model descriptions do not report any specific text on signs or boards.",
+      "expected_context": [],
+      "chunk_types_expected": []
+    },
+    {
+      "question": "What is the current weather forecast for New York City?",
+      "ground_truth": "This question cannot be answered from the uploaded images — none contain weather forecast data. The uploaded content consists of photographs and object detection samples with no weather information.",
+      "expected_context": [],
+      "chunk_types_expected": []
+    },
+    {
+      "question": "Describe the amusement park image.",
+      "ground_truth": "The amusement park image (pic10.jpg) shows a carousel or swing ride illuminated at night with yellow and purple lights against a dark sky.",
+      "expected_context": ["Figure description of pic10.jpg carousel at night."],
+      "chunk_types_expected": ["figure"]
+    }
+  ]
+}

@@ -87,5 +87,10 @@ Thumbs.db
 ehthumbs.db
 desktop.ini
 
+# ── Evaluation output ────────────────────────────────────────────────────────
+# Generated eval results — keep golden_dataset.json tracked
+backend/eval/*.json
+!backend/eval/golden_dataset.json
+
 # ── Docker overrides ──────────────────────────────────────────────────────────
 docker-compose.override.yml

@@ -5,8 +5,12 @@ import base64
 import logging
 import re
 import time
+import threading
 
 logger = logging.getLogger(__name__)
+
+# Ollama processes one vision request at a time — serialize all calls
+_ollama_lock = threading.Semaphore(1)
 
 _VISION_BACKEND      = os.getenv("VISION_BACKEND",       "ollama")
 _GEMINI_API_KEY      = os.getenv("GEMINI_API_KEY",       "")
@@ -28,13 +32,18 @@ _EMPTY_RESULT = {
 
 # Prompt for backends that understand instruction-following (Gemini, OpenAI, Ollama)
 _PROMPT_TEMPLATE = (
-    "You are analyzing a figure extracted from a technical or scientific PDF.\n"
+    "You are analyzing an image or figure.\n"
     "The surrounding text context is: {context}\n"
-    "Analyze this figure carefully. Return ONLY a valid JSON object "
+    "IMPORTANT — object detection annotations: if the image contains solid-colour filled "
+    "silhouettes or bounding-box annotation overlays painted over objects, describe the "
+    "underlying real-world objects being annotated, not the colour fills themselves. "
+    "For example, a purple filled silhouette of a person holding a board should be described "
+    "as 'a person carrying a surfboard', not 'a purple cartoon figure'.\n"
+    "Analyze this image carefully. Return ONLY a valid JSON object "
     "with no markdown, no backticks, no preamble. Schema:\n"
     '{{\n'
     '  "description": "detailed 3-5 sentence description of what this shows",\n'
-    '  "entities": ["key concept 1", "key concept 2"],\n'
+    '  "entities": ["key object or concept 1", "key object or concept 2"],\n'
     '  "relationships": [\n'
     '    {{"from": "Entity A", "type": "RELATES_TO", "to": "Entity B"}}\n'
     '  ],\n'
@@ -266,24 +275,94 @@ class VisionService:
 
     # ── Ollama ────────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _resize_for_ollama(image_bytes: bytes, max_dim: int = 1280) -> bytes:
+        """Resize image so its longest side is at most max_dim pixels.
+        Large images cause VRAM exhaustion in Ollama and 500 errors."""
+        from PIL import Image as PILImage
+        img = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
+        w, h = img.size
+        if max(w, h) > max_dim:
+            scale = max_dim / max(w, h)
+            img = img.resize((int(w * scale), int(h * scale)), PILImage.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
     def _describe_ollama(self, image_bytes: bytes, image_path: str, prompt: str) -> dict:
+        import httpx
+
+        # Resize before encoding — prevents VRAM exhaustion for large images
         try:
-            import httpx
-            b64     = base64.b64encode(image_bytes).decode()
-            payload = {
-                "model":  _OLLAMA_VISION_MODEL,
-                "prompt": prompt,
-                "images": [b64],
-                "stream": False,
-            }
-            resp = httpx.post(
-                f"{_OLLAMA_BASE_URL}/api/generate",
-                json=payload,
-                timeout=120.0,
-            )
-            resp.raise_for_status()
-            raw = resp.json().get("response", "")
-            return _parse_json(raw)
+            image_bytes = self._resize_for_ollama(image_bytes)
         except Exception as exc:
-            logger.error("Ollama vision error for %s: %s", image_path, exc)
-            return dict(_EMPTY_RESULT)
+            logger.warning("Could not resize %s: %s — sending original", image_path, exc)
+
+        b64     = base64.b64encode(image_bytes).decode()
+        payload = {
+            "model":  _OLLAMA_VISION_MODEL,
+            "prompt": prompt,
+            "images": [b64],
+            "stream": False,
+        }
+
+        # Ollama handles one vision request at a time — wait for the lock,
+        # then retry up to 3 times on 500 (model busy / loading)
+        with _ollama_lock:
+            for attempt in range(3):
+                try:
+                    resp = httpx.post(
+                        f"{_OLLAMA_BASE_URL}/api/generate",
+                        json=payload,
+                        timeout=300.0,
+                    )
+                    resp.raise_for_status()
+                    raw = resp.json().get("response", "").strip()
+                    if not raw:
+                        raise ValueError("Ollama returned empty response")
+
+                    # Try structured JSON first; fall back to raw text as description
+                    try:
+                        return _parse_json(raw)
+                    except Exception:
+                        logger.warning(
+                            "Could not parse JSON from Ollama for %s — using raw text as description",
+                            image_path,
+                        )
+                        return {
+                            "description":   raw,
+                            "entities":      [],
+                            "relationships": [],
+                            "figure_type":   _infer_figure_type(raw),
+                            "caption":       "",
+                        }
+
+                except httpx.HTTPStatusError as exc:
+                    body = ""
+                    try:
+                        body = exc.response.text[:200]
+                    except Exception:
+                        pass
+                    if exc.response.status_code == 500 and attempt < 2:
+                        wait = 15 * (attempt + 1)
+                        logger.warning(
+                            "Ollama 500 for %s (attempt %d/3, body=%s), retrying in %ds...",
+                            image_path, attempt + 1, body, wait,
+                        )
+                        time.sleep(wait)
+                        continue
+                    logger.error("Ollama vision error for %s: %s | %s", image_path, exc, body)
+                    return dict(_EMPTY_RESULT)
+                except Exception as exc:
+                    if attempt < 2:
+                        wait = 15 * (attempt + 1)
+                        logger.warning(
+                            "Ollama error for %s (attempt %d/3): %s, retrying in %ds...",
+                            image_path, attempt + 1, exc, wait,
+                        )
+                        time.sleep(wait)
+                        continue
+                    logger.error("Ollama vision error for %s: %s", image_path, exc)
+                    return dict(_EMPTY_RESULT)
+
+        return dict(_EMPTY_RESULT)
