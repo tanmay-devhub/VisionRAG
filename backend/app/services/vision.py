@@ -86,9 +86,65 @@ def _get_paligemma():
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 def _parse_json(raw: str) -> dict:
-    cleaned = re.sub(r"^```(?:json)?", "", raw.strip(), flags=re.IGNORECASE)
-    cleaned = re.sub(r"```$", "", cleaned.strip())
-    return json.loads(cleaned.strip())
+    """
+    Parse a JSON string from a vision model response.
+    Always returns a complete dict with all five keys.
+    Never raises — returns _EMPTY_RESULT on any failure.
+    Applies figure_type fallback via _infer_figure_type (Fix 2).
+    """
+    if not raw or not raw.strip():
+        return dict(_EMPTY_RESULT)
+
+    try:
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r"\s*```\s*$", "", cleaned)
+        cleaned = cleaned.strip()
+
+        try:
+            parsed = json.loads(cleaned)
+        except json.JSONDecodeError:
+            try:
+                from json_repair import repair_json
+                parsed = json.loads(repair_json(cleaned))
+            except Exception:
+                return dict(_EMPTY_RESULT)
+
+        if not isinstance(parsed, dict):
+            return dict(_EMPTY_RESULT)
+
+        result = {
+            "description":   str(parsed.get("description") or "").strip(),
+            "entities":      parsed.get("entities") or [],
+            "relationships": parsed.get("relationships") or [],
+            "figure_type":   str(parsed.get("figure_type") or "").strip().lower(),
+            "caption":       str(parsed.get("caption") or "").strip(),
+        }
+
+        if not isinstance(result["entities"], list):
+            result["entities"] = []
+        result["entities"] = [
+            str(e).strip() for e in result["entities"] if e and str(e).strip()
+        ]
+
+        if not isinstance(result["relationships"], list):
+            result["relationships"] = []
+        result["relationships"] = [
+            r for r in result["relationships"]
+            if isinstance(r, dict) and "from" in r and "to" in r
+        ]
+
+        # Fix 2: fall back to inferred type if model returned empty/unknown value
+        _KNOWN_TYPES = {"chart", "diagram", "flowchart", "table", "equation", "image"}
+        if result["figure_type"] not in _KNOWN_TYPES:
+            result["figure_type"] = _infer_figure_type(result["description"])
+
+        return result
+
+    except Exception as exc:
+        logger.warning("_parse_json failed: %s | raw[:200]=%s", exc, raw[:200])
+        return dict(_EMPTY_RESULT)
 
 
 def _infer_figure_type(text: str) -> str:

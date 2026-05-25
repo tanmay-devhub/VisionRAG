@@ -26,6 +26,7 @@ async def query(request: QueryRequest) -> QueryResponse:
                 score=r["score"],
                 type=r.get("type", "vector"),
                 chunk_type=r.get("chunk_type", "text"),
+                media_type=r.get("media_type"),
                 image_url=r.get("image_url"),
                 figure_type=r.get("figure_type"),
                 caption=r.get("caption"),

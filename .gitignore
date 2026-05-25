@@ -44,9 +44,6 @@ backend/chroma_db/
 static/figures/
 backend/uploads/
 
-# ── HuggingFace model cache (PaliGemma) ──────────────────────────────────────
-.cache/huggingface/
-
 # ── Model weights ─────────────────────────────────────────────────────────────
 models/
 *.bin

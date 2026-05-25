@@ -26,6 +26,7 @@ class Source(BaseModel):
     score:       float
     type:        str
     chunk_type:  str = "text"
+    media_type:  Optional[str] = None
     image_url:   Optional[str] = None
     figure_type: Optional[str] = None
     caption:     Optional[str] = None

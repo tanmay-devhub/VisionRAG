@@ -75,14 +75,19 @@ def _query_api(question: str, top_k: int = 5) -> dict:
 def _extract_contexts(api_result: dict) -> list[str]:
     """
     Build context strings from query response sources.
-    Prefixes figure and table chunks so the LLM judge knows the content type.
+    Prefixes figure, table, and video frame chunks so the LLM judge knows the content type.
     """
     contexts = []
     for s in api_result.get("sources", []):
         chunk_type  = s.get("chunk_type", "text")
+        media_type  = s.get("media_type") or ""
         text        = s.get("text", "")
         figure_type = s.get("figure_type") or ""
-        if chunk_type == "figure":
+
+        if media_type == "video" and chunk_type == "frame":
+            ts = s.get("page_number")
+            prefix = f"[Video frame {ts}] " if ts is not None else "[Video frame] "
+        elif chunk_type == "figure":
             prefix = f"[Figure: {figure_type}] " if figure_type else "[Figure] "
         elif chunk_type == "table":
             prefix = "[Table] "

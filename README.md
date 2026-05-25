@@ -66,7 +66,7 @@ VisionRAG ingests images, routes each one through a configurable vision model, s
 | Backend | FastAPI + Uvicorn (Python 3.11+) |
 | Graph store | Neo4j 5.x (Community Edition) |
 | Embeddings | `all-MiniLM-L6-v2` via fastembed (ONNX, no PyTorch) |
-| Reranker | `cross-encoder/ms-marco-MiniLM-L-6-v2` via fastembed |
+| Reranker | `Xenova/ms-marco-MiniLM-L-6-v2` via fastembed (ONNX) |
 | Text LLM | Ollama (`llama3.2`) via langchain-ollama |
 | Vision | Ollama · PaliGemma 2 · Gemini Flash · GPT-4o |
 | Fuzzy matching | rapidfuzz (entity deduplication) |
@@ -228,6 +228,7 @@ Scores range from `0.0` to `1.0`. Edit `backend/eval/golden_dataset.json` to add
 | `JOB_STORE_PATH` | `./jobs.db` | SQLite path for ingest job tracking |
 | `ENTITY_DEDUP_THRESHOLD` | `88` | rapidfuzz score threshold for entity merging (0-100) |
 | `VISUAL_SIM_THRESHOLD` | `0.82` | Cosine similarity cutoff for `VISUALLY_SIMILAR` edges |
+| `RERANK_CANDIDATE_MULTIPLIER` | `3` | Candidates passed to CrossEncoder = `top_k * this`; raise for video |
 
 ---
 

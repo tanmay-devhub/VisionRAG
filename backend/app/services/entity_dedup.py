@@ -8,7 +8,7 @@
 import os
 import logging
 
-from app.services.graph_store import _get_driver_ready
+from app.services.graph_store import _get_driver_ready, _normalise_entity
 
 logger = logging.getLogger(__name__)
 
@@ -80,13 +80,14 @@ def run_entity_dedup(filename: str | None = None) -> dict:
             "entities_after":   entities_before,
         }
 
-    # pairwise fuzzy comparison
-    names = [e["name"] for e in entities]
-    uf    = _UF(names)
+    # pairwise fuzzy comparison — normalise names so underscores, casing, etc. don't block matches
+    names       = [e["name"] for e in entities]
+    norm_names  = [_normalise_entity(n) for n in names]
+    uf          = _UF(names)
 
     for i in range(len(names)):
         for j in range(i + 1, len(names)):
-            score = token_sort_ratio(names[i], names[j])
+            score = token_sort_ratio(norm_names[i], norm_names[j])
             if score >= _ENTITY_DEDUP_THRESHOLD:
                 logger.debug(
                     "Merging '%s' → '%s' (score=%.1f)", names[j], names[i], score

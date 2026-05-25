@@ -3,7 +3,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+_MODEL_NAME = "Xenova/ms-marco-MiniLM-L-6-v2"
 _reranker   = None  # fastembed TextCrossEncoder, lazy
 
 

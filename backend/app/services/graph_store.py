@@ -18,6 +18,7 @@ _NEO4J_URI      = os.getenv("NEO4J_URI",      "bolt://localhost:7687")
 _NEO4J_USER     = os.getenv("NEO4J_USER",     "neo4j")
 _NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "neo4j")
 _EMBED_MODEL    = os.getenv("EMBED_MODEL",    "all-MiniLM-L6-v2")
+_RERANK_CANDIDATE_MULTIPLIER = int(os.getenv("RERANK_CANDIDATE_MULTIPLIER", "3"))
 
 _driver        = None   # neo4j.Driver, lazy
 _embedder      = None   # SentenceTransformer, lazy
@@ -104,6 +105,7 @@ def create_indexes() -> None:
 def _normalise_entity(name: str) -> str:
     n = unicodedata.normalize("NFKC", name)
     n = n.strip().lower()
+    n = n.replace("_", " ")          # treat underscores as spaces for fuzzy matching
     n = re.sub(r"\s+", " ", n)
     return n
 
@@ -326,7 +328,7 @@ def query_chunks(question: str, top_k: int) -> list[dict]:
     """
     embedder  = _get_embedder()
     q_emb     = list(embedder.embed([question]))[0].tolist()
-    candidate_n = top_k * 3
+    candidate_n = top_k * _RERANK_CANDIDATE_MULTIPLIER
 
     # extract keywords (no stopwords, len > 2)
     keywords = [
@@ -348,6 +350,7 @@ def query_chunks(question: str, top_k: int) -> list[dict]:
             "score":       float(score),
             "type":        rtype,
             "chunk_type":  node.get("chunk_type", "text"),
+            "media_type":  node.get("media_type") or None,
             "image_url":   node.get("image_url")   or None,
             "figure_type": node.get("figure_type") or None,
             "caption":     node.get("caption")     or None,
@@ -372,7 +375,7 @@ def query_chunks(question: str, top_k: int) -> list[dict]:
                 score = float(rec["score"])
                 cid   = node["id"]
                 vec_ranked.append((cid, score))
-                if cid not in chunk_map:
+                if cid not in chunk_map or score > chunk_map[cid]["score"]:
                     chunk_map[cid] = _row_to_dict(node, score, "vector")
         except Exception as exc:
             logger.warning("Vector search failed: %s", exc)
@@ -397,7 +400,7 @@ def query_chunks(question: str, top_k: int) -> list[dict]:
                     cid   = node["id"]
                     score = raw_score / max_score
                     ft_ranked.append((cid, score))
-                    if cid not in chunk_map:
+                    if cid not in chunk_map or score > chunk_map[cid]["score"]:
                         chunk_map[cid] = _row_to_dict(node, score, "graph")
             except Exception as exc:
                 logger.warning("Fulltext search failed: %s", exc)
@@ -434,7 +437,7 @@ def query_chunks(question: str, top_k: int) -> list[dict]:
                         score = float(rec["score"])
                         cid   = node["id"]
                         graph_ranked.append((cid, score))
-                        if cid not in chunk_map:
+                        if cid not in chunk_map or score > chunk_map[cid]["score"]:
                             chunk_map[cid] = _row_to_dict(node, score, "graph")
                 except Exception as exc:
                     logger.warning("Graph traversal failed for kw=%s: %s", kw, exc)
@@ -447,9 +450,11 @@ def query_chunks(question: str, top_k: int) -> list[dict]:
 
     # update type to "hybrid" when a chunk appears in multiple strategies
     vec_ids   = {cid for cid, _ in vec_ranked}
-    graph_ids = {cid for cid, _ in ft_ranked} | {cid for cid, _ in graph_ranked}
-    for cid in rrf_scores:
-        if cid in vec_ids and cid in graph_ids:
+    ft_ids    = {cid for cid, _ in ft_ranked}
+    graph_ids = {cid for cid, _ in graph_ranked}
+    for cid in chunk_map:
+        found_in = sum([cid in vec_ids, cid in ft_ids, cid in graph_ids])
+        if found_in > 1:
             chunk_map[cid]["type"] = "hybrid"
 
     sorted_ids = sorted(rrf_scores, key=lambda x: rrf_scores[x], reverse=True)

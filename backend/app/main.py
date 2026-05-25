@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.routers import ingest, query, graph
-from app.services import graph_store
+from app.services import graph_store, reranker
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -33,9 +33,11 @@ _FIGURES_DIR  = str((_BACKEND_ROOT / _raw_figures).resolve())
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import asyncio
+
     os.makedirs(_FIGURES_DIR, exist_ok=True)
 
-    # SQLite job store — stdlib only, instant
+    # 1. SQLite job store — stdlib only, instant
     try:
         from app.services import job_store
         job_store.mark_interrupted_jobs()
@@ -43,8 +45,36 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("Job store init failed: %s", exc)
 
-    # Neo4j + embeddings connect lazily on first request (avoids Defender DLL scan at startup)
-    logger.info("VisionRAG ready — Neo4j and embeddings will connect on first use")
+    # 2. Neo4j eager ping — fail fast rather than silently on first request
+    try:
+        graph_store.ping()
+        graph_store.create_indexes()
+        logger.info("Neo4j ready — indexes ensured")
+    except Exception as exc:
+        logger.warning("Neo4j startup ping failed: %s — will retry on first request", exc)
+
+    # 3. Warm up embedding model in background (non-blocking)
+    async def _warmup_embedder():
+        try:
+            await asyncio.to_thread(
+                lambda: list(graph_store._get_embedder().embed(["warmup"]))
+            )
+            logger.info("Embedder warmed up")
+        except Exception as exc:
+            logger.warning("Embedder warmup failed: %s", exc)
+
+    # 4. Warm up reranker in background (non-blocking)
+    async def _warmup_reranker():
+        try:
+            await asyncio.to_thread(reranker._get_reranker)
+            logger.info("Reranker warmed up")
+        except Exception as exc:
+            logger.warning("Reranker warmup failed: %s", exc)
+
+    asyncio.create_task(_warmup_embedder())
+    asyncio.create_task(_warmup_reranker())
+
+    logger.info("VisionRAG startup complete")
     yield
 
 
