@@ -1,8 +1,8 @@
 "use client";
 import { useState, useCallback, useEffect, useRef, DragEvent, ChangeEvent } from "react";
-import { ingestFile, getJobStatus, JobStatus } from "@/lib/api";
+import { ingestFile, getJobStatus, deleteFile, JobStatus } from "@/lib/api";
 
-type LocalStatus = "queued" | "submitted" | "pending" | "processing" | "done" | "error";
+type LocalStatus = "queued" | "submitted" | "pending" | "processing" | "done" | "error" | "cancelled";
 
 interface FileEntry {
   id:     string;
@@ -16,16 +16,29 @@ interface FileEntry {
 let _ctr = 0;
 const uid = () => String(++_ctr);
 
-const _SUPPORTED_EXTS = [".pdf", ".png", ".jpg", ".jpeg", ".webp"];
+const _VIDEO_EXTS    = new Set([".mp4", ".mov", ".avi", ".mkv", ".webm"]);
+const _SUPPORTED_EXTS = [".pdf", ".png", ".jpg", ".jpeg", ".webp", ".mp4", ".mov", ".avi", ".mkv", ".webm"];
 
-function isSupportedFile(name: string): boolean {
-  const ext = name.toLowerCase().slice(name.lastIndexOf("."));
-  return _SUPPORTED_EXTS.includes(ext);
+function getExt(name: string): string {
+  return name.toLowerCase().slice(name.lastIndexOf("."));
 }
 
-function getSubStep(job: JobStatus | null): string {
+function isSupportedFile(name: string): boolean {
+  return _SUPPORTED_EXTS.includes(getExt(name));
+}
+
+function isVideoFile(name: string): boolean {
+  return _VIDEO_EXTS.has(getExt(name));
+}
+
+function getSubStep(job: JobStatus | null, video: boolean): string {
   if (!job) return "Queued";
   const { chunks_done, total_chunks, figure_count, table_count } = job;
+  if (video) {
+    if (total_chunks === 0) return "Extracting frames…";
+    if (chunks_done < total_chunks) return "Describing frames with vision model…";
+    return "Indexing frames…";
+  }
   if (total_chunks > 0 && chunks_done < total_chunks) {
     const textDone = chunks_done - figure_count - table_count;
     if (textDone < (total_chunks - figure_count - table_count)) {
@@ -80,6 +93,21 @@ export default function UploadPanel() {
     });
   }, [submitFiles]);
 
+  const cancelUpload = useCallback(async (id: string) => {
+    const entry = queueRef.current.find(e => e.id === id);
+    if (!entry) return;
+
+    // Mark as cancelled immediately to stop polling
+    update(id, { status: "cancelled" });
+
+    // Delete all ingested data for this file from Neo4j
+    try {
+      await deleteFile(entry.file.name);
+    } catch {
+      // File may not have been stored yet — that's fine
+    }
+  }, [update]);
+
   useEffect(() => {
     const timer = setInterval(async () => {
       const active = queueRef.current.filter(
@@ -121,7 +149,7 @@ export default function UploadPanel() {
       <div className="flex items-center gap-2">
         <h2 className="text-base font-semibold text-gray-700">Upload Files</h2>
         <span
-          title="Supports PDF (text + figures + tables extracted), PNG, JPG, JPEG, WEBP (analyzed directly by vision model)"
+          title="Images (PNG, JPG, WEBP): analyzed by vision model. Videos (MP4, MOV, AVI, MKV, WEBM): keyframes extracted via ffmpeg, each frame described by vision model."
           className="w-4 h-4 rounded-full bg-teal-100 text-teal-600 text-[10px] font-bold flex items-center justify-center cursor-help"
         >
           i
@@ -135,7 +163,7 @@ export default function UploadPanel() {
         className={`relative flex flex-col items-center justify-center border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors
           ${dragging ? "border-blue-400 bg-blue-50" : "border-gray-300 bg-gray-50 hover:border-blue-300"}`}
       >
-        <input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp" multiple
+        <input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.mp4,.mov,.avi,.mkv,.webm" multiple
           className="absolute inset-0 opacity-0 cursor-pointer"
           onChange={onInputChange} />
         <svg className="w-10 h-10 text-gray-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -143,7 +171,7 @@ export default function UploadPanel() {
             d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
         </svg>
         <p className="text-sm text-gray-600 font-medium">Drag &amp; drop or click to upload</p>
-        <p className="text-xs text-gray-400 mt-1">PDF · PNG · JPG · WEBP · multiple files supported</p>
+        <p className="text-xs text-gray-400 mt-1">Images: PNG · JPG · WEBP &nbsp;·&nbsp; Video: MP4 · MOV · AVI · MKV · WEBM</p>
       </div>
 
       {total > 0 && (
@@ -163,7 +191,7 @@ export default function UploadPanel() {
       {queue.length > 0 && (
         <ul className="flex flex-col gap-2 max-h-72 overflow-y-auto pr-1">
           {queue.map(entry => (
-            <FileCard key={entry.id} entry={entry} />
+            <FileCard key={entry.id} entry={entry} onCancel={cancelUpload} />
           ))}
         </ul>
       )}
@@ -172,11 +200,20 @@ export default function UploadPanel() {
   );
 }
 
-function FileCard({ entry }: { entry: FileEntry }) {
+function FileCard({ entry, onCancel }: { entry: FileEntry; onCancel: (id: string) => void }) {
   const { file, status, job, error } = entry;
-  const pct = job && job.total_chunks > 0
+  const video = isVideoFile(file.name);
+  const pct   = job && job.total_chunks > 0
     ? Math.round((job.chunks_done / job.total_chunks) * 100)
     : null;
+  const [cancelling, setCancelling] = useState(false);
+
+  const handleCancel = async () => {
+    setCancelling(true);
+    await onCancel(entry.id);
+  };
+
+  const canCancel = status === "pending" || status === "processing" || status === "queued" || status === "submitted";
 
   return (
     <li className="rounded-lg border border-gray-200 bg-white p-3">
@@ -185,17 +222,29 @@ function FileCard({ entry }: { entry: FileEntry }) {
         <span className="text-xs font-medium text-gray-700 truncate flex-1" title={file.name}>
           {file.name}
         </span>
+        {canCancel && (
+          <button
+            onClick={handleCancel}
+            disabled={cancelling}
+            className="text-xs text-red-400 hover:text-red-600 transition-colors disabled:opacity-40 shrink-0"
+            title="Cancel upload and delete all data"
+          >
+            {cancelling ? "Cancelling…" : "Cancel"}
+          </button>
+        )}
         <span className="text-xs text-gray-400 shrink-0">
-          {(file.size / 1024).toFixed(0)} KB
+          {(file.size / 1024 / 1024) >= 1
+            ? `${(file.size / 1024 / 1024).toFixed(1)} MB`
+            : `${(file.size / 1024).toFixed(0)} KB`}
         </span>
       </div>
 
       {(status === "pending" || status === "processing") && (
         <div className="mt-2">
           <div className="flex justify-between text-xs text-gray-400 mb-1">
-            <span>{getSubStep(job)}</span>
+            <span>{getSubStep(job, video)}</span>
             {job && job.total_chunks > 0 && (
-              <span>{job.chunks_done}/{job.total_chunks} chunks</span>
+              <span>{job.chunks_done}/{job.total_chunks} {video ? "frames" : "chunks"}</span>
             )}
           </div>
           <div className="w-full bg-gray-100 rounded-full h-1.5">
@@ -209,10 +258,19 @@ function FileCard({ entry }: { entry: FileEntry }) {
 
       {status === "done" && job && (
         <p className="mt-1.5 text-xs text-green-700">
-          {job.chunks_done} chunks
-          {job.figure_count > 0 && <span className="text-teal-600"> · {job.figure_count} figures</span>}
-          {job.table_count  > 0 && <span className="text-amber-600"> · {job.table_count} tables</span>}
+          {video ? (
+            <span>{job.chunks_done} frames indexed</span>
+          ) : (
+            <>
+              {job.chunks_done} chunks
+              {job.figure_count > 0 && <span className="text-teal-600"> · {job.figure_count} figures</span>}
+              {job.table_count  > 0 && <span className="text-amber-600"> · {job.table_count} tables</span>}
+            </>
+          )}
         </p>
+      )}
+      {status === "cancelled" && (
+        <p className="mt-1.5 text-xs text-orange-600">Cancelled — data deleted</p>
       )}
       {status === "error" && (
         <p className="mt-1.5 text-xs text-red-600 break-words">{error}</p>
@@ -237,6 +295,12 @@ function StatusIcon({ status }: { status: LocalStatus }) {
   if (status === "done") return (
     <svg className="w-4 h-4 text-green-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+    </svg>
+  );
+  if (status === "cancelled") return (
+    <svg className="w-4 h-4 text-orange-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M18.364 5.636a9 9 0 11-12.728 0 9 9 0 0112.728 0z" />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v4m0 4h.01" />
     </svg>
   );
   return (

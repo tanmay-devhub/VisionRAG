@@ -1,8 +1,8 @@
-# ── VisionRAG Phase 1 / 2 ──────────────────────────────────────────────────
-# Step 1: LLM prompt fix
-# LLM behaviour: uploaded content is primary source; general knowledge fills gaps only
-# RAG improvement: prevents silent context-ignore; answers stay grounded in retrieved chunks
-# ──────────────────────────────────────────────────────────────────────────
+# ── VisionRAG Phase 4: Ollama Cloud Video ─────────────────────────────────────
+# File: backend/app/services/llm.py
+# Changes: Fix 2 — LLM prompt grounding for partial relevance + video summaries
+# Image pipeline: UNTOUCHED
+# ─────────────────────────────────────────────────────────────────────────────
 
 import os
 
@@ -21,33 +21,30 @@ def get_llm():
 
 
 def generate_answer(question: str, context_chunks: list[str]) -> str:
-    """
-    Answer using uploaded content as the primary source, supplemented by
-    general knowledge where the context is incomplete or silent on a sub-point.
-    Uploaded content always takes priority — general knowledge fills gaps only.
-    """
     numbered_context = "\n".join(
         f"[{i + 1}] {chunk}" for i, chunk in enumerate(context_chunks)
     )
     prompt = (
-        "You are a knowledgeable assistant with access to both uploaded documents "
+        "You are a knowledgeable assistant with access to both uploaded content "
         "and broad general knowledge.\n\n"
-        "The uploaded content below may include text passages, figure descriptions, "
-        "and table data extracted from documents or images.\n\n"
-        "Priority rules:\n"
-        "1. ALWAYS lead with information from the uploaded content when it is relevant. "
-        "Cite it explicitly — e.g. 'According to the uploaded document...' or "
-        "'The figure shows...' or 'The table indicates...'.\n"
-        "2. After covering what the uploaded content says, you MAY add relevant "
-        "general knowledge to fill gaps, provide background, or extend the answer — "
-        "but clearly signal the shift: 'More generally...' or 'For additional context...'.\n"
-        "3. If the uploaded content fully answers the question, do not pad with "
-        "general knowledge — a focused answer is better.\n"
-        "4. If the uploaded content is completely unrelated to the question, say so "
-        "briefly ('The uploaded content doesn't directly address this') and then "
-        "answer from general knowledge.\n"
-        "5. When referencing a figure, mention what it shows. "
-        "When referencing a table, summarise its key data.\n\n"
+        "The uploaded content below contains descriptions of images, video frames, "
+        "video summaries, text passages, or table data from uploaded files.\n\n"
+        "Priority rules — follow in order:\n\n"
+        "1. ALWAYS lead with what the uploaded content explicitly shows or states. "
+        "Cite directly: 'The video shows...', 'Frame [1] shows...', "
+        "'According to the uploaded content...'\n\n"
+        "2. PARTIAL RELEVANCE — if content shows the right scene but not the "
+        "specific action asked about:\n"
+        "   a. Describe what the content DOES show.\n"
+        "   b. State the gap: 'The content doesn't explicitly show [X].'\n"
+        "   c. Only then add general knowledge, prefixed: 'More generally...'\n"
+        "   NEVER fabricate actions, events, or story details not in the content.\n\n"
+        "3. FULL RELEVANCE — if content directly answers, use it only.\n\n"
+        "4. NO RELEVANCE — say 'The uploaded content doesn't address this' then "
+        "use general knowledge.\n\n"
+        "5. VIDEO — describe the narrative arc and key events from video summaries. "
+        "For individual frames, describe only what is visually present.\n\n"
+        "6. FIGURES AND TABLES — describe what they show or summarise key data.\n\n"
         f"Uploaded content:\n{numbered_context}\n\n"
         f"Question: {question}\n\n"
         "Answer:"

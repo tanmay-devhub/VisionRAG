@@ -31,6 +31,7 @@ async def query(request: QueryRequest) -> QueryResponse:
                 figure_type=r.get("figure_type"),
                 caption=r.get("caption"),
                 page_number=r.get("page_number"),
+                timestamp_ms=r.get("timestamp_ms"),
             )
             for r in ranked
         ]

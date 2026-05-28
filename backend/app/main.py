@@ -1,6 +1,7 @@
-# ── VisionRAG Neo4j Migration ─────────────────────────────────────────────────
-# Replaces: ChromaDB lifespan ping + health key "chroma"
-# Video-ready: lifespan is generic; adding video routes requires no changes here.
+# ── VisionRAG Phase 4: Ollama Cloud Video ─────────────────────────────────────
+# File: backend/app/main.py
+# Changes: Added ffmpeg check + video cloud model info at startup and /health
+# Image pipeline: UNTOUCHED
 # ─────────────────────────────────────────────────────────────────────────────
 
 from dotenv import load_dotenv
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 _OLLAMA_BASE_URL     = os.getenv("OLLAMA_BASE_URL",     "http://localhost:11434")
 _GEMINI_API_KEY      = os.getenv("GEMINI_API_KEY",      "")
 _VISION_BACKEND      = os.getenv("VISION_BACKEND",      "ollama")
-_OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "qwen2.5vl:7b")
+_OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "qwen3-vl:8b")
 _PALIGEMMA_MODEL     = os.getenv("PALIGEMMA_MODEL",     "google/paligemma2-3b-ft-docci-448")
 
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
@@ -73,6 +74,27 @@ async def lifespan(app: FastAPI):
 
     asyncio.create_task(_warmup_embedder())
     asyncio.create_task(_warmup_reranker())
+
+    # 5. ffmpeg availability check — non-fatal warning
+    try:
+        import subprocess as _sp
+        _ffr = _sp.run(["ffmpeg", "-version"], capture_output=True, timeout=5)
+        if _ffr.returncode == 0:
+            logger.info("ffmpeg available — video ingest enabled")
+        else:
+            logger.warning("ffmpeg not working — video ingest will fail")
+    except FileNotFoundError:
+        logger.warning(
+            "ffmpeg not found — video ingest disabled. "
+            "Install: brew install ffmpeg (Mac) / apt install ffmpeg (Linux) / winget install ffmpeg (Windows)"
+        )
+    except Exception:
+        pass
+
+    # 6. Video cloud model info
+    _cloud_model = os.getenv("VIDEO_CLOUD_MODEL", "qwen3-vl:235b-instruct-cloud")
+    _max_dur = os.getenv("VIDEO_MAX_DURATION_SEC", "180")
+    logger.info("Video: cloud model=%s, max duration=%ss", _cloud_model, _max_dur)
 
     logger.info("VisionRAG startup complete")
     yield
@@ -125,10 +147,12 @@ async def health() -> dict:
         vision_label = f"Ollama · {_OLLAMA_VISION_MODEL}"
 
     return {
-        "status":         "ok",
-        "neo4j":          neo4j_status,
-        "ollama":         ollama_status,
-        "gemini":         gemini_status,
-        "vision_backend": _VISION_BACKEND,
-        "vision_label":   vision_label,
+        "status":              "ok",
+        "neo4j":               neo4j_status,
+        "ollama":              ollama_status,
+        "gemini":              gemini_status,
+        "vision_backend":      _VISION_BACKEND,
+        "vision_label":        vision_label,
+        "video_cloud_model":   os.getenv("VIDEO_CLOUD_MODEL", "qwen3-vl:235b-instruct-cloud"),
+        "video_max_duration":  int(os.getenv("VIDEO_MAX_DURATION_SEC", "180")),
     }

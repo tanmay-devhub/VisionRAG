@@ -30,7 +30,8 @@ class Source(BaseModel):
     image_url:   Optional[str] = None
     figure_type: Optional[str] = None
     caption:     Optional[str] = None
-    page_number: Optional[int] = None
+    page_number:  Optional[int] = None
+    timestamp_ms: Optional[int] = None
 
 
 class QueryRequest(BaseModel):

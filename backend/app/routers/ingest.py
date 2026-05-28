@@ -1,7 +1,7 @@
-# ── VisionRAG Neo4j Migration ─────────────────────────────────────────────────
-# Replaces: nothing structural — adds DELETE /ingest/{filename} route only.
-# Video-ready: dispatcher can be extended with _run_ingest_video() for .mp4/.mov
-#              without touching any existing route.
+# ── VisionRAG Phase 4: Ollama Cloud Video ─────────────────────────────────────
+# File: backend/app/routers/ingest.py
+# Changes: Added _VIDEO_EXTS, duration check, _run_ingest_video (Ollama Cloud)
+# Image pipeline: UNTOUCHED
 # ─────────────────────────────────────────────────────────────────────────────
 
 import os
@@ -19,9 +19,11 @@ from app.services.figure_extractor import _FIGURES_DIR, _FIGURES_SERVE_URL
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_PDF_EXTS   = {".pdf"}
-_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
-_ALL_EXTS   = _PDF_EXTS | _IMAGE_EXTS
+_PDF_EXTS           = {".pdf"}
+_IMAGE_EXTS         = {".png", ".jpg", ".jpeg", ".webp"}
+_VIDEO_EXTS         = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+_ALL_EXTS           = _PDF_EXTS | _IMAGE_EXTS | _VIDEO_EXTS
+_VIDEO_MAX_DURATION = int(os.getenv("VIDEO_MAX_DURATION_SEC", "180"))  # 3 minutes
 
 
 # ── PDF ingest ────────────────────────────────────────────────────────────────
@@ -139,12 +141,154 @@ def _run_ingest_image(job_id: str, filename: str, tmp_path: str) -> None:
             pass
 
 
+# ── Video ingest (Ollama Cloud — no local GPU) ────────────────────────────────
+
+def _run_ingest_video(job_id: str, filename: str, tmp_path: str) -> None:
+    """
+    Video ingest pipeline:
+    1. Extract 15-45 keyframes via ffmpeg (CPU only)
+    2. Send ALL frames to Ollama Cloud for video summary (one /api/chat call)
+    3. Send each frame individually for per-frame descriptions
+    4. Store video_summary + frame chunks in Neo4j
+
+    Uses qwen3-vl:235b-instruct-cloud via Ollama Cloud /api/chat.
+    Does NOT use local Ollama, VisionService, or describe_figure.
+    """
+    from app.services.frame_extractor import FrameExtractor, get_video_duration
+    from app.services.video_describer import describe_video_summary, describe_single_frame
+
+    job_store.update_job(job_id, status="processing")
+    try:
+        os.makedirs(_FIGURES_DIR, exist_ok=True)
+        stem     = os.path.splitext(filename)[0]
+        doc_id   = stem + "_" + job_id[:8]
+        duration = get_video_duration(tmp_path)
+
+        # Step 1 — Extract keyframes (ffmpeg, CPU only)
+        logger.info("Job %s: extracting frames from %s (%.1fs)", job_id, filename, duration)
+        extractor = FrameExtractor()
+        frames    = extractor.extract_frames(tmp_path, doc_id)
+
+        if not frames:
+            raise ValueError(
+                "No frames extracted. Check: ffmpeg installed, video valid. "
+                "Supported: MP4, MOV, AVI, MKV, WEBM."
+            )
+
+        job_store.update_job(
+            job_id, total_chunks=len(frames) + 1,
+            figure_count=len(frames), table_count=0,
+        )
+
+        chunks = []
+
+        # Step 2 — Video summary (ALL frames in one Ollama Cloud call)
+        logger.info("Job %s: generating video summary (%d frames via cloud)", job_id, len(frames))
+        summary = describe_video_summary(frames, filename, duration)
+        summary_desc = summary.get("description", "")
+
+        if summary_desc:
+            key_events = summary.get("key_events", [])
+            desc_with_events = summary_desc
+            if key_events:
+                events_text = " | ".join(
+                    f"[{e.get('timestamp_approx', '?')}] {e.get('event', '')}"
+                    for e in key_events if e.get("event")
+                )
+                desc_with_events = f"{summary_desc}\n\nKey events: {events_text}"
+
+            chunks.append({
+                "text":                desc_with_events,
+                "chunk_index":         0,
+                "chunk_type":          "video_summary",
+                "image_path":          "",
+                "image_url":           "",
+                "figure_type":         summary.get("figure_type", "image"),
+                "caption":             summary.get("caption", ""),
+                "page_number":         0,
+                "timestamp_ms":        0,
+                "extra_entities":      summary.get("entities", []),
+                "extra_relationships": summary.get("relationships", []),
+            })
+            logger.info(
+                "Job %s: video summary done (%d entities, %d events)",
+                job_id, len(summary.get("entities", [])), len(summary.get("key_events", [])),
+            )
+        else:
+            logger.warning("Job %s: summary returned empty — frames only", job_id)
+
+        # Step 3 — Individual frame descriptions via Cloud
+        logger.info("Job %s: describing %d frames individually via cloud", job_id, len(frames))
+        for i, frame in enumerate(frames):
+            try:
+                result = describe_single_frame(
+                    image_path=frame["image_path"],
+                    timestamp_ms=frame["timestamp_ms"],
+                    filename=filename,
+                )
+                desc = result.get("description", "")
+                if not desc:
+                    logger.warning("Job %s: empty frame %d (t=%dms)", job_id, i, frame["timestamp_ms"])
+                    continue
+
+                chunks.append({
+                    "text":                desc,
+                    "chunk_index":         len(chunks),
+                    "chunk_type":          "frame",
+                    "image_path":          frame["image_path"],
+                    "image_url":           frame["image_url"],
+                    "figure_type":         result.get("figure_type", "image"),
+                    "caption":             result.get("caption", ""),
+                    "page_number":         frame["frame_index"],
+                    "timestamp_ms":        frame["timestamp_ms"],
+                    "extra_entities":      result.get("entities", []),
+                    "extra_relationships": result.get("relationships", []),
+                })
+                job_store.update_job(job_id, chunks_done=len(chunks))
+                logger.info("Job %s: frame %d/%d (t=%dms)", job_id, i + 1, len(frames), frame["timestamp_ms"])
+
+            except Exception as exc:
+                logger.warning("Job %s: frame %d failed: %s", job_id, i, exc)
+                continue
+
+        if not chunks:
+            raise ValueError(
+                "No content generated. Check Ollama Cloud model is accessible. "
+                "Test: ollama run qwen3-vl:235b-instruct-cloud 'hello'"
+            )
+
+        # Step 4 — Store in Neo4j
+        graph_store.store_chunks(
+            chunks, filename,
+            progress_cb=lambda done: job_store.update_job(job_id, chunks_done=done),
+        )
+
+        summary_count = 1 if summary_desc else 0
+        frame_count   = len(chunks) - summary_count
+        job_store.update_job(job_id, status="done", chunks_done=len(chunks))
+        logger.info(
+            "Job %s done: %s — %d summary + %d frames = %d chunks",
+            job_id, filename, summary_count, frame_count, len(chunks),
+        )
+
+    except Exception as exc:
+        logger.error("Job %s failed: %s", job_id, exc)
+        job_store.update_job(job_id, status="error", error=str(exc))
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
 # ── dispatcher ────────────────────────────────────────────────────────────────
 
 def _run_ingest(job_id: str, filename: str, file_path: str) -> None:
     ext = os.path.splitext(filename)[1].lower()
     if ext in _IMAGE_EXTS:
         _run_ingest_image(job_id, filename, file_path)
+    elif ext in _VIDEO_EXTS:
+        _run_ingest_video(job_id, filename, file_path)
     else:
         _run_ingest_pdf(job_id, filename, file_path)
 
@@ -164,7 +308,7 @@ async def ingest(
     if ext not in _ALL_EXTS:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported file type '{ext}'. Allowed: PDF, PNG, JPG, JPEG, WEBP",
+            detail=f"Unsupported file type '{ext}'. Allowed: PDF, PNG, JPG, JPEG, WEBP, MP4, MOV, AVI, MKV, WEBM",
         )
 
     data   = await file.read()
@@ -172,6 +316,33 @@ async def ingest(
     tmp    = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     tmp.write(data)
     tmp.close()
+
+    # Video duration check — reject videos longer than 3 minutes
+    if ext in _VIDEO_EXTS:
+        from app.services.frame_extractor import get_video_duration
+        duration = get_video_duration(tmp.name)
+        if duration > _VIDEO_MAX_DURATION:
+            try:
+                os.unlink(tmp.name)
+            except Exception:
+                pass
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Video is {int(duration)}s long (max {_VIDEO_MAX_DURATION}s / "
+                    f"{_VIDEO_MAX_DURATION // 60} minutes). "
+                    "Please trim your video to 3 minutes or less."
+                ),
+            )
+        if duration == 0:
+            try:
+                os.unlink(tmp.name)
+            except Exception:
+                pass
+            raise HTTPException(
+                status_code=400,
+                detail="Could not determine video duration. Is ffmpeg installed? Is the file a valid video?",
+            )
 
     job_id = job_store.create_job(filename)
     background_tasks.add_task(_run_ingest, job_id, filename, tmp.name)

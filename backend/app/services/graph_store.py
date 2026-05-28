@@ -112,7 +112,7 @@ def _normalise_entity(name: str) -> str:
 
 def _derive_source_type(chunks: list[dict]) -> str:
     for c in chunks:
-        if c.get("chunk_type") in ("frame", "transcript"):
+        if c.get("chunk_type") in ("frame", "transcript", "video_summary"):
             return "video"
     if (
         len(chunks) == 1
@@ -232,7 +232,7 @@ def store_chunks(
         visual_chunks = [
             (chunk_rows[i], chunks[i])
             for i in range(len(chunks))
-            if chunks[i].get("chunk_type") in ("figure", "frame")
+            if chunks[i].get("chunk_type") in ("figure", "frame", "video_summary")
         ]
 
         for crow, chunk in visual_chunks:
@@ -350,11 +350,12 @@ def query_chunks(question: str, top_k: int) -> list[dict]:
             "score":       float(score),
             "type":        rtype,
             "chunk_type":  node.get("chunk_type", "text"),
-            "media_type":  node.get("media_type") or None,
-            "image_url":   node.get("image_url")   or None,
-            "figure_type": node.get("figure_type") or None,
-            "caption":     node.get("caption")     or None,
-            "page_number": None if pn in (-1, None) else int(pn),
+            "media_type":   node.get("media_type")   or None,
+            "image_url":    node.get("image_url")    or None,
+            "figure_type":  node.get("figure_type")  or None,
+            "caption":      node.get("caption")      or None,
+            "page_number":  None if pn in (-1, None) else int(pn),
+            "timestamp_ms": node.get("timestamp_ms") or None,
         }
 
     with _get_driver_ready().session() as session:

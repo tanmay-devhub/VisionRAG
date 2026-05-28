@@ -40,7 +40,7 @@ backend/jobstore/
 # ── Legacy data directories ───────────────────────────────────────────────────
 backend/chroma_db/
 
-# ── Uploaded files ────────────────────────────────────────────────────────────
+# ── Uploaded files & extracted frames ─────────────────────────────────────────
 static/figures/
 backend/uploads/
 
@@ -91,3 +91,10 @@ backend/eval/*.json
 
 # ── Docker overrides ──────────────────────────────────────────────────────────
 docker-compose.override.yml
+
+# ── Video temp files ──────────────────────────────────────────────────────────
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm

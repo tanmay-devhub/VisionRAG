@@ -1,3 +1,9 @@
+# ── VisionRAG Phase 4 v1: Video Support (Frame-Only) ─────────────────────────
+# File: backend/requirements.txt
+# Changes: Added ffmpeg comment (no new pip packages — ffmpeg is system binary)
+# Image pipeline: UNTOUCHED — zero lines removed or modified
+# ─────────────────────────────────────────────────────────────────────────────
+
 fastapi
 uvicorn[standard]
 python-dotenv
@@ -17,3 +23,6 @@ python-multipart
 pydantic-settings
 httpx
 json-repair
+
+# Video support: ffmpeg must be installed system-wide
+# brew install ffmpeg (Mac) / apt install ffmpeg (Linux) / winget install ffmpeg (Windows)

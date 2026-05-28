@@ -1,3 +1,9 @@
+# ── VisionRAG Phase 4: Ollama Cloud Video ─────────────────────────────────────
+# File: backend/app/services/vision.py
+# Changes: NONE — this file is IMAGE-ONLY. Video uses video_describer.py.
+# Image pipeline: UNTOUCHED
+# ─────────────────────────────────────────────────────────────────────────────
+
 import os
 import io
 import json
@@ -18,7 +24,7 @@ _GEMINI_MODEL        = os.getenv("GEMINI_MODEL",         "gemini-2.0-flash")
 _OPENAI_API_KEY      = os.getenv("OPENAI_API_KEY",       "")
 _OPENAI_VISION_MODEL = os.getenv("OPENAI_VISION_MODEL",  "gpt-4o-mini")
 _OLLAMA_BASE_URL     = os.getenv("OLLAMA_BASE_URL",      "http://localhost:11434")
-_OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL",  "qwen2.5vl:7b")
+_OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL",  "qwen3-vl:8b")
 _PALIGEMMA_MODEL_ID  = os.getenv("PALIGEMMA_MODEL",      "google/paligemma2-3b-ft-docci-448")
 _HF_TOKEN            = os.getenv("HF_TOKEN",             "")
 

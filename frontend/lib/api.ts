@@ -22,16 +22,18 @@ export interface JobStatus {
 }
 
 export interface Source {
-  text:        string;
-  source:      string;
-  chunk_index: number;
-  score:       number;
-  type:        string;
-  chunk_type:  string;
-  image_url:   string | null;
-  figure_type: string | null;
-  caption:     string | null;
-  page_number: number | null;
+  text:         string;
+  source:       string;
+  chunk_index:  number;
+  score:        number;
+  type:         string;
+  chunk_type:   string;
+  media_type:   string | null;
+  image_url:    string | null;
+  figure_type:  string | null;
+  caption:      string | null;
+  page_number:  number | null;
+  timestamp_ms: number | null;
 }
 
 export interface QueryResponse {
