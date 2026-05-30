@@ -33,9 +33,10 @@ secrets/
 backend/neo4j_data/
 backend/neo4j_logs/
 
-# ── Job store (SQLite) ────────────────────────────────────────────────────────
+# ── Job store & runtime data ──────────────────────────────────────────────────
 backend/jobs.db
 backend/jobstore/
+backend/gemini_usage.json
 
 # ── Legacy data directories ───────────────────────────────────────────────────
 backend/chroma_db/

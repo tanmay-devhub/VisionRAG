@@ -39,22 +39,31 @@ _EMPTY_RESULT = {
 # Prompt for backends that understand instruction-following (Gemini, OpenAI, Ollama)
 _PROMPT_TEMPLATE = (
     "You are analyzing an image or figure.\n"
-    "The surrounding text context is: {context}\n"
-    "IMPORTANT — object detection annotations: if the image contains solid-colour filled "
-    "silhouettes or bounding-box annotation overlays painted over objects, describe the "
-    "underlying real-world objects being annotated, not the colour fills themselves. "
-    "For example, a purple filled silhouette of a person holding a board should be described "
-    "as 'a person carrying a surfboard', not 'a purple cartoon figure'.\n"
-    "Analyze this image carefully. Return ONLY a valid JSON object "
+    "The surrounding text context is: {context}\n\n"
+    "IMPORTANT RULES:\n"
+    "- If the image contains solid-colour silhouettes or bounding-box overlays, "
+    "describe the underlying real objects, not the colour fills.\n"
+    "- If the image contains ANY visible text (signs, labels, menus, code, titles, "
+    "captions, watermarks, handwriting), transcribe ALL of it exactly as written.\n"
+    "- If the image shows a menu, price list, or table: list EVERY item with its "
+    "associated numbers/prices/values. Do not summarize — transcribe completely.\n"
+    "- If text is in multiple languages, transcribe ALL languages present.\n"
+    "- If the image shows a chart or graph: describe the type, axes, labels, "
+    "data values, trends, and legend entries.\n"
+    "- If the image shows code: identify the language, filename if visible, "
+    "and describe the key functions/variables/logic.\n\n"
+    "Analyze this image thoroughly. Return ONLY a valid JSON object "
     "with no markdown, no backticks, no preamble. Schema:\n"
     '{{\n'
-    '  "description": "detailed 3-5 sentence description of what this shows",\n'
-    '  "entities": ["key object or concept 1", "key object or concept 2"],\n'
+    '  "description": "comprehensive description — as long as needed to capture ALL '
+    'visible content. Include every readable text, every data point, every entity. '
+    '5-20 sentences depending on image complexity.",\n'
+    '  "entities": ["every distinct object, person, text element, brand, concept visible"],\n'
     '  "relationships": [\n'
     '    {{"from": "Entity A", "type": "RELATES_TO", "to": "Entity B"}}\n'
     '  ],\n'
-    '  "figure_type": "chart|diagram|flowchart|table|equation|image",\n'
-    '  "caption": "visible caption text or empty string"\n'
+    '  "figure_type": "chart|diagram|flowchart|table|equation|image|menu|code|sign",\n'
+    '  "caption": "all visible caption/title/header text — empty string if none"\n'
     '}}'
 )
 
@@ -278,6 +287,11 @@ class VisionService:
                         prompt,
                     ],
                 )
+                try:
+                    from app.services.gemini_usage_tracker import record_request
+                    record_request()
+                except Exception:
+                    pass
                 return _parse_json(response.text)
 
             except Exception as exc:
@@ -354,32 +368,35 @@ class VisionService:
     def _describe_ollama(self, image_bytes: bytes, image_path: str, prompt: str) -> dict:
         import httpx
 
-        # Resize before encoding — prevents VRAM exhaustion for large images
+        # Resize before encoding — prevents large payloads
         try:
             image_bytes = self._resize_for_ollama(image_bytes)
         except Exception as exc:
             logger.warning("Could not resize %s: %s — sending original", image_path, exc)
 
         b64     = base64.b64encode(image_bytes).decode()
+
+        # Use /api/chat (NOT /api/generate) — cloud models ignore images in /api/generate
         payload = {
             "model":  _OLLAMA_VISION_MODEL,
-            "prompt": prompt,
-            "images": [b64],
+            "messages": [{
+                "role": "user",
+                "content": prompt,
+                "images": [b64],
+            }],
             "stream": False,
         }
 
-        # Ollama handles one vision request at a time — wait for the lock,
-        # then retry up to 3 times on 500 (model busy / loading)
         with _ollama_lock:
             for attempt in range(3):
                 try:
                     resp = httpx.post(
-                        f"{_OLLAMA_BASE_URL}/api/generate",
+                        f"{_OLLAMA_BASE_URL}/api/chat",
                         json=payload,
                         timeout=300.0,
                     )
                     resp.raise_for_status()
-                    raw = resp.json().get("response", "").strip()
+                    raw = resp.json().get("message", {}).get("content", "").strip()
                     if not raw:
                         raise ValueError("Ollama returned empty response")
 
@@ -405,11 +422,11 @@ class VisionService:
                         body = exc.response.text[:200]
                     except Exception:
                         pass
-                    if exc.response.status_code == 500 and attempt < 2:
+                    if exc.response.status_code in (500, 503) and attempt < 2:
                         wait = 15 * (attempt + 1)
                         logger.warning(
-                            "Ollama 500 for %s (attempt %d/3, body=%s), retrying in %ds...",
-                            image_path, attempt + 1, body, wait,
+                            "Ollama %d for %s (attempt %d/3, body=%s), retrying in %ds...",
+                            exc.response.status_code, image_path, attempt + 1, body, wait,
                         )
                         time.sleep(wait)
                         continue

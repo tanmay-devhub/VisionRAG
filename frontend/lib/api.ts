@@ -75,10 +75,11 @@ export interface FileList {
 
 // ── functions ─────────────────────────────────────────────────────────────────
 
-export async function ingestFile(file: File): Promise<IngestResponse> {
+export async function ingestFile(file: File, videoBackend: string = "gemini"): Promise<IngestResponse> {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${API_BASE}/ingest`, { method: "POST", body: form });
+  const url = `${API_BASE}/ingest?video_backend=${encodeURIComponent(videoBackend)}`;
+  const res = await fetch(url, { method: "POST", body: form });
   if (!res.ok) {
     const detail = await res.text();
     throw new Error(detail || `Ingest failed with status ${res.status}`);

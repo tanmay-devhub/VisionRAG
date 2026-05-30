@@ -1,3 +1,9 @@
+# ── VisionRAG Phase 5: Quality + Security ─────────────────────────────────────
+# File: backend/app/routers/query.py
+# Fixes: A2 (irrelevant source filtering)
+# ─────────────────────────────────────────────────────────────────────────────
+
+import os
 import asyncio
 import logging
 from fastapi import APIRouter, HTTPException
@@ -6,6 +12,8 @@ from app.services import graph_store, llm, reranker
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+_MIN_SOURCE_SCORE = float(os.getenv("MIN_SOURCE_SCORE", "0.01"))
 
 
 @router.post("/query", response_model=QueryResponse)
@@ -17,6 +25,11 @@ async def query(request: QueryRequest) -> QueryResponse:
         ranked = await asyncio.to_thread(
             reranker.rerank, request.question, candidates, request.top_k
         )
+
+        # ── Fix A2: filter out irrelevant sources ─────────────────────────
+        ranked = [r for r in ranked if r["score"] >= _MIN_SOURCE_SCORE]
+        ranked = ranked[:request.top_k]  # cap after filtering
+        # ──────────────────────────────────────────────────────────────────
 
         sources = [
             Source(
@@ -41,6 +54,7 @@ async def query(request: QueryRequest) -> QueryResponse:
                 llm.generate_answer, request.question, [s.text for s in sources]
             )
         else:
+            # No relevant sources found — use general knowledge
             answer = await asyncio.to_thread(
                 llm.generate_general_answer, request.question
             )

@@ -1,215 +1,322 @@
 # VisionRAG
 
-**Multimodal RAG with a live knowledge graph: upload images and videos, ask questions, explore extracted entities.**
-
-VisionRAG ingests images and short videos, routes them through vision models (local for images, cloud for video), stores descriptions and entities in a Neo4j graph database, and answers natural-language questions with hybrid retrieval (vector, full-text, entity graph traversal and visual similarity). A built-in graph viewer lets you explore the extracted knowledge graph interactively.
-
----
-
-## Features
-
-- **Image ingest**: PNG, JPG, and WEBP images; auto-resized to max 1280 px before processing
-- **Video ingest**: MP4, MOV, AVI, MKV, WEBM videos up to 3 minutes; keyframes extracted via ffmpeg, described by Ollama Cloud (235B model)
-- **Video summary**: all frames sent in one cloud call for a chronological narrative with key events
-- **Four image vision backends**: Ollama (local GPU), PaliGemma (local HuggingFace), Gemini Flash, or OpenAI GPT-4o
-- **Separate video pipeline**: Ollama Cloud `qwen3-vl:235b-instruct-cloud` — no local GPU used for video
-- **Object detection awareness**: vision prompt describes annotated objects, not annotation colours
-- **Knowledge graph**: entities and relationships stored in Neo4j, linked to source media
-- **Entity deduplication**: on-demand fuzzy merge of near-duplicate `VisualEntity` nodes
-- **Visual similarity edges**: `VISUALLY_SIMILAR` edges connect chunks with cosine-similar embeddings
-- **Hybrid retrieval**: vector + full-text + entity graph traversal fused with Reciprocal Rank Fusion
-- **CrossEncoder reranking**: `ms-marco-MiniLM-L-6-v2` reranker applied before the LLM
-- **Grounded answer generation**: partial relevance handling — never fabricates story details from frames
-- **Interactive graph viewer**: D3 force-directed graph with per-file filtering, node labels, and search
-- **Per-file management**: delete individual files and all their graph nodes
-- **Real-time ingest progress**: polling-based status updates during processing
-- **Cancel upload**: cancel in-progress uploads and delete all associated data
-- **RAGAS evaluation harness**: 5 LLM-as-judge metrics including visual grounding
-- **Duration guard**: videos over 3 minutes rejected at upload with clear error message
+A multimodal retrieval-augmented generation system that ingests images and videos, extracts visual understanding using configurable vision backends, stores everything in a Neo4j knowledge graph, and answers questions grounded in the uploaded content.
 
 ---
 
 ## How it works
 
 ```
-+----------------------------------------------------------------------+
-|  IMAGE INGEST (local GPU)                                            |
-|                                                                      |
-|  Image (PNG / JPG / WEBP)                                            |
-|      +-> Auto-resize (max 1280 px) -> saved to static/figures/      |
-|      +-> Local Ollama (qwen3-vl:8b) -> description + entities       |
-|              +-> Neo4j :MediaChunk (chunk_type="figure")             |
-|                      +-> :DEPICTS, :CO_OCCURS_WITH                   |
-+----------------------------------------------------------------------+
+INGEST
+──────
+Image  ──► Vision model (local or cloud) ──► text description + entities
+                                                         │
+Video ──────────┬─ Gemini: whole video → narrative + 10-20 timestamped events
+                └─ Ollama Cloud: ffmpeg keyframes → summary + per-frame descriptions (parallel)
+                                                         │
+                                                         ▼
+                                                   Neo4j graph
+                                          (MediaChunk, VisualEntity nodes)
+                                          (NEXT_CHUNK, DEPICTS, CO_OCCURS_WITH edges)
 
-+----------------------------------------------------------------------+
-|  VIDEO INGEST (Ollama Cloud — no local GPU)                          |
-|                                                                      |
-|  Video (MP4 / MOV / AVI / MKV / WEBM, max 3 min)                    |
-|      +-> Duration check (reject if > 180s)                           |
-|      +-> ffmpeg scene detection -> 15-45 keyframe timestamps         |
-|      +-> Extract JPEG frames at 640px (CPU only)                     |
-|      +-> Ollama Cloud (qwen3-vl:235b) /api/chat:                     |
-|          +-> ALL frames in one call -> video_summary chunk           |
-|          +-> Each frame individually -> per-frame descriptions       |
-|              +-> Neo4j :MediaChunk (chunk_type="video_summary"|"frame")
-|                      +-> :DEPICTS, :CO_OCCURS_WITH                   |
-+----------------------------------------------------------------------+
-
-+----------------------------------------------------------------------+
-|  QUERY                                                               |
-|                                                                      |
-|  Question                                                            |
-|      +-> Vector search          -+                                   |
-|      +-> Full-text search        +-> RRF fusion -> CrossEncoder      |
-|      +-> Graph traversal        -+       +-> top-k chunks           |
-|              +-> DEPICTS                         +-> Ollama LLM      |
-|              +-> CO_OCCURS_WITH                          +-> Answer  |
-|              +-> VISUALLY_SIMILAR                                    |
-+----------------------------------------------------------------------+
+QUERY
+─────
+Question ──► vector search ─┐
+         ──► fulltext search ├──► RRF fusion ──► cross-encoder rerank ──► LLM answer
+         ──► entity traversal┘                        (top-k grounded sources)
 ```
 
 ---
 
-## Tech stack
+## Supported files
 
-| Layer | Technology |
-|---|---|
-| Backend | FastAPI + Uvicorn (Python 3.11+) |
-| Graph store | Neo4j 5.x (Community Edition) |
-| Embeddings | `all-MiniLM-L6-v2` via fastembed (ONNX, no PyTorch) |
-| Reranker | `Xenova/ms-marco-MiniLM-L-6-v2` via fastembed (ONNX) |
-| Text LLM | Ollama (`llama3.2`) via langchain-ollama |
-| Image vision | Local Ollama (`qwen3-vl:8b`) · PaliGemma 2 · Gemini Flash · GPT-4o |
-| Video vision | Ollama Cloud (`qwen3-vl:235b-instruct-cloud`) via `/api/chat` |
-| Frame extraction | ffmpeg (system binary, CPU only) |
-| Fuzzy matching | rapidfuzz (entity deduplication) |
-| Image processing | Pillow (resize, format normalisation) |
-| Evaluation | Custom RAGAS harness with Ollama as LLM judge |
-| Frontend | Next.js 14 · TypeScript · Tailwind CSS · D3.js v7 |
+| Type | Formats | Limit |
+|------|---------|-------|
+| Images | PNG · JPG · WEBP | 50 MB |
+| Video | MP4 · MOV · AVI · MKV · WEBM | 500 MB · 3 min max |
 
 ---
 
-## Quick start (local)
+## Vision backends
 
-### Prerequisites
+### Image / PDF figures `VISION_BACKEND`
 
-- Python 3.11+
-- Node.js 18+
-- Neo4j 5.x running locally ([Download Neo4j Desktop](https://neo4j.com/download/) or via Docker)
-- [Ollama](https://ollama.com) installed and running
-- ffmpeg installed (for video support)
+| Value | Model | Notes |
+|-------|-------|-------|
+| `ollama` *(default)* | any `OLLAMA_VISION_MODEL` | Free, local, requires GPU |
+| `paligemma` | `google/paligemma2-3b-ft-docci-448` | Free, ~3 GB download, `HF_TOKEN` required |
+| `gemini` | `gemini-2.0-flash` | Free tier, `GEMINI_API_KEY` required |
+| `openai` | any `OPENAI_VISION_MODEL` | Paid, `OPENAI_API_KEY` required |
+
+### Video: chosen per upload in the UI
+
+| Backend | How | Speed (45 s video) | Chunks |
+|---------|----|-------------------|--------|
+| **Gemini** | Uploads entire video; one API call returns narrative + 10–20 timestamped events | ~30–60 s | 1 summary + N events |
+| **Ollama Cloud** | ffmpeg extracts 15–45 keyframes; frames described in parallel via cloud | ~1–2 min | 1 summary + 15–45 frames |
+
+Gemini is faster. Ollama produces more sources (per-frame thumbnails, exact timestamps) and is private.
+
+---
+
+## Quick start
+
+### Local
+
+**Requirements**: Python 3.11+, Node.js 18+, Neo4j 5+, ffmpeg, Ollama
 
 ```bash
-# Models
-ollama pull llama3.2                        # LLM for answers
-ollama pull qwen3-vl:8b                     # local vision for images
-ollama pull qwen3-vl:235b-instruct-cloud    # cloud vision for video
+# 1. Pull models
+ollama pull llama3.2                        # LLM
+ollama pull qwen2.5vl:7b                    # local image vision
 
-# ffmpeg (pick your OS)
-# Windows: winget install ffmpeg
-# Mac: brew install ffmpeg
-# Linux: sudo apt install ffmpeg
-```
+# ffmpeg (video support)
+# Windows:  winget install ffmpeg
+# macOS:    brew install ffmpeg
+# Linux:    sudo apt install ffmpeg
 
-### Backend
-
-```bash
+# 2. Backend
 cd backend
-cp .env.example .env       # fill in NEO4J_PASSWORD at minimum
-
+cp .env.example .env          # set NEO4J_PASSWORD at minimum
+python -m venv .venv
+.venv/Scripts/activate        # Windows: use `source .venv/bin/activate` on macOS/Linux
 pip install -r requirements.txt
 uvicorn app.main:app --port 8081 --reload
-```
 
-### Frontend
-
-```bash
-cd frontend
+# 3. Frontend
+cd visionrag/frontend
 npm install
 npm run dev -- --port 3001
 ```
 
 Open [http://localhost:3001](http://localhost:3001).
 
----
-
-## Quick start (Docker)
+### Docker
 
 ```bash
-cp backend/.env.example backend/.env   # set API keys if needed
-
+cd visionrag
+cp backend/.env.example backend/.env   # set keys as needed
 docker compose up --build
 
-# Pull models into the Ollama container (first run only)
+# First-run model pull
 docker exec visionrag-ollama ollama pull llama3.2
-docker exec visionrag-ollama ollama pull qwen3-vl:8b
-docker exec visionrag-ollama ollama pull qwen3-vl:235b-instruct-cloud
+docker exec visionrag-ollama ollama pull qwen2.5vl:7b
 ```
 
 | Service | URL |
-|---|---|
+|---------|-----|
 | Frontend | http://localhost:3001 |
-| Backend API | http://localhost:8081 |
-| Neo4j Browser | http://localhost:7474 |
+| Backend | http://localhost:8081 |
+| Neo4j Browser | http://localhost:7475 |
+| Neo4j Bolt | bolt://localhost:7688 |
 
 ---
 
-## Image vision backends
+## Configuration
 
-Configure `VISION_BACKEND` in `backend/.env` (images only — video always uses cloud):
+All settings are in `backend/.env` (copy from `backend/.env.example`).
 
-| Value | Model | Requirement |
-|---|---|---|
-| `ollama` *(default)* | `qwen3-vl:8b` (or any `OLLAMA_VISION_MODEL`) | Ollama running locally + GPU |
-| `paligemma` | `google/paligemma2-3b-ft-docci-448` | `HF_TOKEN` + license accepted |
-| `gemini` | `gemini-2.0-flash` | `GEMINI_API_KEY` (free tier) |
-| `openai` | `gpt-4o-mini` (or any `OPENAI_VISION_MODEL`) | `OPENAI_API_KEY` (paid) |
+### Required
+
+| Variable | Description |
+|----------|-------------|
+| `NEO4J_PASSWORD` | Your Neo4j password |
+
+### LLM and image vision
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server |
+| `LLM_MODEL` | `llama3.2` | Model for answer generation |
+| `VISION_BACKEND` | `ollama` | `ollama` · `paligemma` · `gemini` · `openai` |
+| `OLLAMA_VISION_MODEL` | `qwen2.5vl:7b` | Local Ollama vision model |
+| `GEMINI_API_KEY` | Required for Gemini vision or Gemini video |
+| `OPENAI_API_KEY` | Required for OpenAI vision |
+| `HF_TOKEN` | Required for PaliGemma |
+
+### Video
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VIDEO_CLOUD_MODEL` | `qwen3-vl:235b-instruct-cloud` | Ollama Cloud model for frame descriptions |
+| `VIDEO_PARALLEL_FRAMES` | `3` | Concurrent frame API calls. Increase for faster ingest; reduce if rate-limited. |
+| `VIDEO_MAX_DURATION_SEC` | `180` | Max video length accepted (seconds) |
+| `VIDEO_MIN_FRAMES` | `15` | Minimum keyframes extracted |
+| `VIDEO_MAX_FRAMES` | `45` | Maximum keyframes extracted |
+| `VIDEO_SCENE_THRESHOLD` | `0.25` | ffmpeg scene change sensitivity (lower = more frames) |
+| `VIDEO_FRAME_WIDTH` | `640` | Frame JPEG width (pixels) |
+| `GEMINI_VIDEO_MODEL` | `gemini-2.5-flash` | Gemini model for video analysis |
+| `GEMINI_VIDEO_TIMEOUT` | `300` | Gemini API timeout (seconds) |
+| `GEMINI_DAILY_LIMIT` | `1500` | Daily Gemini request cap for usage tracking |
+
+### Retrieval
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `EMBED_MODEL` | `all-MiniLM-L6-v2` | Sentence embedding model (384-dim) |
+| `RERANK_CANDIDATE_MULTIPLIER` | `3` | `top_k × N` candidates sent to cross-encoder |
+| `MIN_SOURCE_SCORE` | `0.01` | Minimum cross-encoder sigmoid score to include a source |
+
+### Security
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VISIONRAG_API_KEY` | *(empty)* | Require `X-API-Key` header on all API calls. Empty = dev mode (no auth). |
+| `RATE_LIMIT_RPM` | `60` | Max requests per minute per IP |
+| `MAX_FILE_SIZE_MB` | `100` | Max upload size (MB) |
 
 ---
 
-## Video support
+## API reference
 
-### How it works
+Base URL: `http://localhost:8081`
 
-1. Upload a video (max 3 minutes, any common format)
-2. ffmpeg detects scene changes and extracts 15–45 keyframes at 640px
-3. All frames are sent to Ollama Cloud (`qwen3-vl:235b-instruct-cloud`) in one call for a narrative summary
-4. Each frame is also described individually for fine-grained retrieval
-5. Both the summary and per-frame descriptions are stored in Neo4j
+### Ingest
 
-### Why Ollama Cloud?
+```
+POST   /ingest?video_backend=gemini|ollama    Upload a file; returns {job_id}
+GET    /jobs/{job_id}                          Poll ingest progress
+GET    /files                                  List ingested files
+DELETE /files/{filename}                       Delete file and all its graph data
+```
 
-- The 235B model produces far better descriptions than any 8B local model
-- No local GPU VRAM is consumed — video processing is entirely remote
-- Your local GPU stays free for image ingest
+### Query
 
-### Video constraints
+```
+POST /query
+Body: {"question": "What is shown?", "top_k": 5}
 
-| Constraint | Value | Configurable |
-|---|---|---|
-| Max duration | 3 minutes (180s) | `VIDEO_MAX_DURATION_SEC` |
-| Min frames | 15 | `VIDEO_MIN_FRAMES` |
-| Max frames | 45 | `VIDEO_MAX_FRAMES` |
-| Frame width | 640px | `VIDEO_FRAME_WIDTH` |
-| Scene threshold | 0.25 | `VIDEO_SCENE_THRESHOLD` |
+Response:
+{
+  "answer": "The video shows...",
+  "sources": [
+    {
+      "text": "...", "source": "cooking.mp4", "score": 0.87,
+      "chunk_type": "frame",
+      "image_url": "http://localhost:8081/figures/...",
+      "timestamp_ms": 9000
+    }
+  ]
+}
+```
 
-### Critical: /api/chat not /api/generate
+### Graph
 
-Ollama Cloud's `/api/generate` endpoint silently ignores images. Video descriptions use `/api/chat` with the messages format. This is handled automatically by `video_describer.py`.
+```
+GET  /graph                      Nodes and edges for the graph view
+GET  /graph/files                Files with chunk counts
+GET  /graph/stats                Aggregate stats
+DELETE /graph                    Clear all data
+
+POST /graph/entity-dedup         Merge near-duplicate entity nodes
+POST /graph/build-similarity     Add VISUALLY_SIMILAR edges
+```
+
+### Health
+
+```
+GET /health
+
+Response includes:
+{
+  "status": "ok",
+  "neo4j": "ok",
+  "ollama": "ok",
+  "gemini": "configured",
+  "gemini_usage": {
+    "requests_today": 3,
+    "daily_limit": 1500,
+    "remaining": 1497,
+    "date": "2026-05-29",
+    "last_request": "2026-05-29T10:22:00Z"
+  }
+}
+```
 
 ---
 
-## Post-ingest graph enrichment
+## Knowledge graph schema
 
-After uploading images or videos, two optional steps improve retrieval quality:
+```
+(:Document)-[:CONTAINS]->(:MediaChunk)
+(:MediaChunk)-[:NEXT_CHUNK]->(:MediaChunk)
+(:MediaChunk)-[:DEPICTS]->(:VisualEntity)
+(:VisualEntity)-[:CO_OCCURS_WITH]->(:VisualEntity)
+(:MediaChunk)-[:VISUALLY_SIMILAR {score}]->(:MediaChunk)
+```
 
-```bash
-# 1. Merge near-duplicate entity nodes
-curl -X POST "http://localhost:8081/graph/entity-dedup"
+| Node | Key properties |
+|------|----------------|
+| `Document` | `filename`, `source_type` (image/video/pdf), `chunk_count`, `ingested_at` |
+| `MediaChunk` | `id`, `chunk_type` (figure/frame/video_summary/text/table), `text`, `embedding`, `image_url`, `timestamp_ms` |
+| `VisualEntity` | `name`, `display_name`, `entity_type`, `mention_count` |
 
-# 2. Build visual similarity edges
-curl -X POST "http://localhost:8081/graph/build-similarity"
+---
+
+## Tech stack
+
+| Layer | Technology |
+|-------|------------|
+| Backend | FastAPI + Uvicorn (Python 3.11+) |
+| Graph store | Neo4j 5.x (Community Edition) |
+| Embeddings | `all-MiniLM-L6-v2` via fastembed (ONNX, CPU only) |
+| Reranker | `ms-marco-MiniLM-L-6-v2` via fastembed (ONNX, CPU only) |
+| LLM | Ollama (local) via `/api/chat` |
+| Image vision | Ollama · PaliGemma · Gemini Flash · GPT-4o |
+| Video vision | Gemini 2.5 Flash (native) · Ollama Cloud 235B (frame-by-frame) |
+| Frame extraction | ffmpeg (system binary, CPU only) |
+| Image processing | Pillow |
+| Entity matching | rapidfuzz |
+| Frontend | Next.js 14 · TypeScript · Tailwind CSS · D3.js v7 |
+
+---
+
+## Project structure
+
+```
+visionrag/
+├── backend/
+│   ├── app/
+│   │   ├── main.py                   FastAPI app, middleware, health endpoint
+│   │   ├── schemas.py                Pydantic models
+│   │   ├── routers/
+│   │   │   ├── ingest.py             File upload + video pipelines (Gemini + Ollama)
+│   │   │   ├── query.py              Hybrid retrieval + answer generation
+│   │   │   └── graph.py             Graph admin + visualisation endpoints
+│   │   └── services/
+│   │       ├── graph_store.py        Neo4j store + RRF retrieval
+│   │       ├── vision.py             Image description (Ollama/PaliGemma/Gemini/OpenAI)
+│   │       ├── gemini_video_describer.py  Gemini native video pipeline
+│   │       ├── video_describer.py    Ollama Cloud frame description
+│   │       ├── frame_extractor.py    ffmpeg scene detection + keyframe extraction
+│   │       ├── gemini_usage_tracker.py    Daily Gemini quota tracking
+│   │       ├── llm.py                Answer generation with grounded prompts
+│   │       ├── reranker.py           Cross-encoder reranking
+│   │       ├── chunker.py            PDF multimodal chunking
+│   │       ├── figure_extractor.py   PDF figure/table extraction
+│   │       ├── entity_dedup.py       Entity deduplication + similarity edges
+│   │       └── job_store.py          SQLite ingest job tracking
+│   ├── eval/                         RAGAS evaluation harness
+│   ├── .env.example
+│   ├── requirements.txt
+│   └── Dockerfile
+├── frontend/
+│   ├── app/
+│   │   ├── page.tsx                  App shell, tab routing
+│   │   ├── globals.css               Design tokens, layout, component styles
+│   │   ├── components/
+│   │   │   ├── ChatWindow.tsx        Chat with grounded source citations
+│   │   │   ├── GraphView.tsx         D3 force-directed knowledge graph
+│   │   │   ├── UploadPanel.tsx       Upload with progress tracking
+│   │   │   ├── FilesPage.tsx         File management
+│   │   │   ├── StatusPage.tsx        Service health + Gemini usage
+│   │   │   └── SourcePanel.tsx       Source cards (text/figure/table/frame)
+│   │   └── lib/api.ts                Typed API wrappers
+│   ├── next.config.ts
+│   └── Dockerfile
+├── static/figures/                   Uploaded images + extracted video frames
+├── docker-compose.yml
+└── README.md
 ```
 
 ---
@@ -217,131 +324,47 @@ curl -X POST "http://localhost:8081/graph/build-similarity"
 ## Evaluation
 
 ```bash
-cd backend
-python eval/ragas_eval.py --subset 3    # smoke test
+cd visionrag/backend
+python eval/ragas_eval.py --subset 3    # smoke test (3 questions)
 python eval/ragas_eval.py               # full run
 ```
 
-| Metric | What it measures |
-|---|---|
-| `faithfulness` | Are answer claims supported by retrieved context? |
-| `answer_relevancy` | Does the answer address the question? |
-| `context_precision` | Are the retrieved chunks relevant? |
-| `context_recall` | Does context cover the ground truth? |
-| `visual_grounding` | Are visual claims grounded in descriptions? |
+| Metric | Description |
+|--------|-------------|
+| `faithfulness` | Answer claims supported by retrieved context |
+| `answer_relevancy` | Answer addresses the question |
+| `context_precision` | Retrieved chunks are relevant |
+| `context_recall` | Context covers the ground truth |
+| `visual_grounding` | Visual claims grounded in frame descriptions |
 
 ---
 
-## Environment variables
+## Post-ingest enrichment
 
-| Variable | Default | Description |
-|---|---|---|
-| `VISION_BACKEND` | `ollama` | Image vision backend |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
-| `OLLAMA_VISION_MODEL` | `qwen3-vl:8b` | Local vision model for images |
-| `LLM_MODEL` | `llama3.2` | Ollama model for answer generation |
-| `VIDEO_CLOUD_MODEL` | `qwen3-vl:235b-instruct-cloud` | Cloud model for video |
-| `VIDEO_MAX_DURATION_SEC` | `180` | Max video duration (seconds) |
-| `VIDEO_MAX_FRAMES` | `45` | Max frames extracted per video |
-| `VIDEO_MIN_FRAMES` | `15` | Min frames (uniform fill if fewer) |
-| `VIDEO_FRAME_WIDTH` | `640` | Frame extraction width (pixels) |
-| `VIDEO_SCENE_THRESHOLD` | `0.25` | ffmpeg scene detection sensitivity |
-| `VIDEO_REQUEST_TIMEOUT` | `300` | Cloud API timeout per request |
-| `NEO4J_URI` | `bolt://localhost:7687` | Neo4j connection |
-| `NEO4J_USER` | `neo4j` | Neo4j username |
-| `NEO4J_PASSWORD` | *(required)* | Neo4j password |
-| `EMBED_MODEL` | `all-MiniLM-L6-v2` | Embedding model |
-| `FIGURES_DIR` | `../static/figures` | Storage for images and frames |
-| `FIGURES_SERVE_URL` | `http://localhost:8081/figures` | Public URL for stored files |
-| `JOB_STORE_PATH` | `./jobs.db` | SQLite job tracking path |
-| `RERANK_CANDIDATE_MULTIPLIER` | `3` | Candidates for CrossEncoder |
+These are optional one-time operations after ingesting new content:
 
----
+```bash
+# Merge near-duplicate entity names (e.g. "frying pan" vs "frying-pan")
+curl -X POST http://localhost:8081/graph/entity-dedup
 
-## Project structure
-
-```
-./
-+-- backend/
-|   +-- app/
-|   |   +-- main.py                  # FastAPI app, CORS, lifespan, health
-|   |   +-- schemas.py               # Pydantic request/response models
-|   |   +-- routers/
-|   |   |   +-- ingest.py            # POST /ingest (image + video), DELETE /ingest/{filename}
-|   |   |   +-- query.py             # POST /query
-|   |   |   +-- graph.py             # Graph admin endpoints
-|   |   +-- services/
-|   |       +-- vision.py            # IMAGE ONLY: local Ollama/PaliGemma/Gemini/OpenAI
-|   |       +-- video_describer.py   # VIDEO ONLY: Ollama Cloud /api/chat
-|   |       +-- frame_extractor.py   # VIDEO: ffmpeg scene detection + frame extraction
-|   |       +-- graph_store.py       # Neo4j store + hybrid retrieval
-|   |       +-- entity_dedup.py      # Entity dedup + visual similarity
-|   |       +-- llm.py              # Answer generation (grounded prompt)
-|   |       +-- reranker.py          # CrossEncoder reranking
-|   |       +-- chunker.py           # PDF multimodal chunking
-|   |       +-- figure_extractor.py  # PDF figure/table extraction
-|   |       +-- job_store.py         # SQLite job tracking
-|   +-- eval/
-|   +-- .env.example
-|   +-- requirements.txt
-|   +-- Dockerfile
-+-- frontend/
-|   +-- app/
-|   |   +-- page.tsx                 # Chat / Graph / Files tabs
-|   |   +-- components/
-|   |       +-- ChatWindow.tsx       # Chat with source citations
-|   |       +-- GraphView.tsx        # D3 knowledge graph
-|   |       +-- UploadPanel.tsx      # Upload with progress + cancel
-|   |       +-- SourcePanel.tsx      # Source cards (figure/table/text/frame)
-|   +-- lib/api.ts                   # Typed API wrappers
-+-- static/figures/                  # Stored images and video frames
-+-- docker-compose.yml
-+-- start.bat
-+-- README.md
+# Add VISUALLY_SIMILAR edges between chunks with similar embeddings
+curl -X POST http://localhost:8081/graph/build-similarity
 ```
 
 ---
 
-## API reference
+## Troubleshooting
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/health` | Service status + video cloud model info |
-| `POST` | `/ingest` | Upload image or video (max 3 min); returns `job_id` |
-| `GET` | `/ingest/status/{job_id}` | Poll ingest progress |
-| `GET` | `/ingest/jobs` | List all ingest jobs |
-| `DELETE` | `/ingest/{filename}` | Delete file and all graph data |
-| `POST` | `/query` | Ask a question; returns `answer` + `sources` |
-| `GET` | `/graph` | Graph data for visualisation |
-| `GET` | `/graph/files` | List ingested files with counts |
-| `GET` | `/graph/stats` | Aggregate stats |
-| `DELETE` | `/graph` | Clear all data |
-| `POST` | `/graph/entity-dedup` | Merge duplicate entities |
-| `POST` | `/graph/build-similarity` | Build similarity edges |
-| `GET` | `/figures/{filename}` | Serve stored image/frame |
+**Neo4j won't connect**: Verify Neo4j is running and the password in `.env` is correct. Default bolt port: 7687.
 
----
+**Ollama model not found**: Run `ollama pull <model>` before starting the backend.
 
-## Graph schema
+**Gemini rate limit (429)**: Free tier allows 15 RPM. The backend retries with backoff. Check `GET /health` → `gemini_usage.remaining` for daily quota.
 
-```
-(:Document)-[:CONTAINS]->(:MediaChunk)
-(:MediaChunk)-[:NEXT_CHUNK]->(:MediaChunk)
-(:MediaChunk)-[:DEPICTS]->(:VisualEntity)
-(:VisualEntity)-[:CO_OCCURS_WITH]->(:VisualEntity)
-(:MediaChunk)-[:VISUALLY_SIMILAR {score: float}]->(:MediaChunk)
-```
+**ffmpeg not found**: Required for Ollama video ingest. Install via your package manager (`winget install ffmpeg` / `brew install ffmpeg` / `sudo apt install ffmpeg`).
 
-| Node label | Key properties |
-|---|---|
-| `Document` | `filename`, `source_type` (`image`/`video`/`pdf`), `chunk_count`, `ingested_at` |
-| `MediaChunk` | `id`, `filename`, `chunk_type` (`figure`/`frame`/`video_summary`/`text`/`table`), `text`, `embedding`, `image_url`, `timestamp_ms` |
-| `VisualEntity` | `name`, `display_name`, `entity_type`, `mention_count` |
+**Video ingest slow with Ollama**: Default is 3 parallel frame requests. Increase `VIDEO_PARALLEL_FRAMES=5` in `.env` if your Ollama Cloud tier allows it. Alternatively switch to the Gemini backend (~30–60 s vs 1–2 min for short videos).
 
-| Relationship | Properties | Description |
-|---|---|---|
-| `CONTAINS` | - | Document owns a chunk |
-| `NEXT_CHUNK` | - | Sequential order within a document |
-| `DEPICTS` | - | Chunk references a visual entity |
-| `CO_OCCURS_WITH` | - | Two entities co-occur in same chunk |
-| `VISUALLY_SIMILAR` | `score` (0-1) | Chunks with similar embeddings |
+**Queries return no sources**: Check `GET /health` for Neo4j and Ollama status. Ensure the file shows "Ready" in the Files tab before querying. Lowering `MIN_SOURCE_SCORE` in `.env` can help for category-level queries.
+
+**Empty frame descriptions**: Verify `VIDEO_CLOUD_MODEL` is accessible: `ollama run qwen3-vl:235b-instruct-cloud "describe this" --image /path/to/test.jpg`
